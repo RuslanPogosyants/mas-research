@@ -23,4 +23,8 @@ def compute_backoff(retry_count: int) -> float:
     Raises:
         ValueError: if `retry_count` is negative or >= RETRY_MAX.
     """
-    raise NotImplementedError("compute_backoff: implemented in M1")
+    if retry_count < 0:
+        raise ValueError(f"retry_count must be non-negative, got {retry_count}")
+    if retry_count >= RETRY_MAX:
+        raise ValueError(f"retry_count must be < {RETRY_MAX}, got {retry_count}")
+    return BACKOFF_SECONDS[retry_count]
