@@ -6,19 +6,22 @@ honouring the required vs optional split defined by the plan.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from src.core.schemas import TaskStatus
 
 if TYPE_CHECKING:
     from src.plan import Plan
 
+SubtaskResults = dict[str, object | None]
 
-def determine_final_status(plan: Plan, results: dict[str, Any | None]) -> TaskStatus:
+
+def determine_final_status(plan: Plan, results: SubtaskResults) -> TaskStatus:
     """Determine the terminal status of a task.
 
-    A subtask is considered failed if its id maps to None in `results` or is
-    missing entirely (never reported back within the deadline).
+    Failure semantics: a subtask is considered failed when its id maps to None
+    in `results`, OR when its id is absent from `results` (never reported back
+    within the deadline). Both cases collapse to `results.get(id) is None`.
 
     Rules:
         - Any required failed -> FAILED
