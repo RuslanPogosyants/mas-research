@@ -1,14 +1,27 @@
-"""Retry policy with exponential backoff.
+"""Retry policy with exponential backoff and per-agent timeouts.
 
 On subtask timeout the coordinator re-publishes up to RETRY_MAX times.
+Per-agent timeouts encode the expected upper bound for a single attempt;
+override per-agent via env (e.g. COORD_TIMEOUT_RECOMMENDER) is wired in M3.
 """
 
 from __future__ import annotations
 
 from typing import Final
 
-RETRY_MAX: Final[int] = 2
 BACKOFF_SECONDS: Final[tuple[float, ...]] = (1.0, 4.0)
+RETRY_MAX: Final[int] = len(BACKOFF_SECONDS)
+
+AGENT_TIMEOUTS_SEC: Final[dict[str, float]] = {
+    "transcriber": 600.0,
+    "ocr": 120.0,
+    "summarizer": 90.0,
+    "test_generator": 60.0,
+    "terminology": 30.0,
+    "recommender": 15.0,
+}
+
+GLOBAL_DEADLINE_SEC: Final[float] = 1800.0
 
 
 def compute_backoff(retry_count: int) -> float:
