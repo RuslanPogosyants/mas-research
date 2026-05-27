@@ -47,5 +47,5 @@ Seven agents (TranscriberAgent, OCRAgent, SummarizerAgent, TestGeneratorAgent, T
 
 ## Conventions
 
-- Code rules: `docs/CODESTYLE.md`
-- Commit rules: `CONTRIBUTING.md`
+- Code style: [`docs/CODESTYLE.md`](docs/CODESTYLE.md)
+- Commits and contributing: [`CONTRIBUTING.md`](CONTRIBUTING.md)
