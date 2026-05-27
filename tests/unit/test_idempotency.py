@@ -28,10 +28,13 @@ def test_duplicates_return_false(message_ids: list[str]) -> None:
 
 
 def test_lru_eviction() -> None:
+    """LRU evicts the oldest unseen message once capacity is exceeded."""
     receiver = IdempotentReceiver(cache_size=3)
     receiver.accept("a")
     receiver.accept("b")
     receiver.accept("c")
-    receiver.accept("d")
-    assert receiver.accept("a") is True
-    assert receiver.accept("b") is False
+    receiver.accept("d")  # cache becomes {b, c, d}; "a" evicted
+    assert receiver.accept("a") is True  # "a" was evicted, treated as new
+    # cache becomes {c, d, a}; "b" evicted
+    assert receiver.accept("c") is False  # "c" is still in cache
+    assert receiver.accept("b") is True  # "b" was evicted by the previous insert

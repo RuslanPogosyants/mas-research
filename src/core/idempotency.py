@@ -16,5 +16,15 @@ class IdempotentReceiver:
         self._seen: OrderedDict[str, None] = OrderedDict()
 
     def accept(self, message_id: str) -> bool:
-        """Accept a message. Returns True if new, False if duplicate."""
-        raise NotImplementedError("accept: implemented in M1")
+        """Accept a message. Returns True if new, False if duplicate.
+
+        On duplicate, refreshes the entry as most-recently-used. On new and
+        cache full, evicts the least-recently-used entry before inserting.
+        """
+        if message_id in self._seen:
+            self._seen.move_to_end(message_id)
+            return False
+        if len(self._seen) >= self._cache_size:
+            self._seen.popitem(last=False)
+        self._seen[message_id] = None
+        return True
