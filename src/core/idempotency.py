@@ -1,6 +1,9 @@
 """Receive-side idempotency: LRU cache of message_id values seen recently.
 
 Protects workers from processing duplicate messages delivered by Redis Streams.
+This is an in-process deduplication layer only: state is lost on restart, and
+correctness across restarts relies on the bus layer (Redis Streams XACK after
+the handler completes, XPENDING+XCLAIM for recovery, spec section 3.3).
 """
 
 from __future__ import annotations
@@ -12,7 +15,10 @@ class IdempotentReceiver:
     """LRU cache over the last N message_id values."""
 
     def __init__(self, cache_size: int = 1000) -> None:
+        if cache_size <= 0:
+            raise ValueError(f"cache_size must be positive, got {cache_size}")
         self._cache_size = cache_size
+        # OrderedDict for O(1) move_to_end; the None value is unused.
         self._seen: OrderedDict[str, None] = OrderedDict()
 
     def accept(self, message_id: str) -> bool:
