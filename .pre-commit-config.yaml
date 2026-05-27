@@ -28,7 +28,8 @@ repos:
           - "sqlalchemy[asyncio]>=2.0"
           - "asyncpg>=0.30"
           - "fastapi>=0.115"
-          - "types-redis"
+          - "redis>=5.2"
+          - "loguru>=0.7"
         args: [--config-file=pyproject.toml]
         files: ^src/
 
