@@ -4,6 +4,7 @@ Multi-agent subsystem for intelligent processing of heterogeneous educational an
 
 ## Status
 
+![CI](https://github.com/RuslanPogosyants/mas-subsystem/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.13-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
