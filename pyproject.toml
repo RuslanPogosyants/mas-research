@@ -40,6 +40,7 @@ dev = [
     "hypothesis>=6.111,<7.0",
     "testcontainers[postgres,redis]>=4.8,<5.0",
     "anyio>=4,<5",
+    "asgi-lifespan>=2,<3",
     "ruff>=0.7,<1.0",
     "mypy>=1.13,<2.0",
     "pre-commit>=4,<5",
@@ -101,8 +102,8 @@ ignore_missing_imports = true
 # args. Disabling these two codes only inside the thin bus wrapper keeps the
 # rest of the codebase under --strict.
 [[tool.mypy.overrides]]
-module = ["src.core.bus"]
-disable_error_code = ["no-untyped-call", "type-arg"]
+module = ["src.core.bus", "src.main"]
+disable_error_code = ["no-untyped-call", "type-arg", "attr-defined"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

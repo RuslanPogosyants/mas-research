@@ -1,27 +1,143 @@
-"""REST API routes. M0 placeholders; real implementation in M2-M4."""
+"""REST API routes wired to the Coordinator and persistence."""
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+import uuid
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+
+from src.agents.coordinator import CoordinatorAgent
+from src.core.schemas import Document, DocumentType, Operation, Task, TaskStatus
+from src.db.repos import DocumentRepo, TaskRepo
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 router = APIRouter(prefix="/api")
 
+UPLOAD_ROOT = Path("data/uploads")
+ALLOWED_AUDIO_SUFFIXES = (".mp3", ".wav", ".m4a", ".flac", ".ogg")
+ALLOWED_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff")
 
-@router.post("/tasks", status_code=202)
-async def create_task(files: list[UploadFile], ops: list[str]) -> dict[str, Any]:
-    """Accept files and ops list, create a Task. Implemented in M2."""
-    raise HTTPException(status_code=501, detail="create_task: implemented in M2")
+
+def _detect_document_type(upload: UploadFile) -> DocumentType:
+    """Choose DocumentType from MIME type or filename suffix."""
+    content_type = (upload.content_type or "").lower()
+    name = (upload.filename or "").lower()
+    if content_type.startswith("audio/") or name.endswith(ALLOWED_AUDIO_SUFFIXES):
+        return DocumentType.AUDIO
+    if content_type == "application/pdf" or name.endswith(".pdf"):
+        return DocumentType.PDF
+    if content_type.startswith("image/") or name.endswith(ALLOWED_IMAGE_SUFFIXES):
+        return DocumentType.IMAGE
+    return DocumentType.TEXT
+
+
+async def _save_upload(upload: UploadFile, destination: Path) -> None:
+    """Stream the upload to disk."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    contents = await upload.read()
+    destination.write_bytes(contents)
+
+
+@router.post("/tasks", status_code=status.HTTP_202_ACCEPTED)
+async def create_task(
+    request: Request,
+    files: list[UploadFile] = File(...),
+    ops: list[str] = Form(...),
+) -> dict[str, str]:
+    """Accept files and ops, create a Task, dispatch async, return 202."""
+    if not files:
+        raise HTTPException(status_code=400, detail="no files provided")
+    try:
+        operations = [Operation(op) for op in ops]
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=f"invalid operation: {error}") from error
+
+    task_id = f"task-{uuid.uuid4().hex[:8]}"
+    task_dir = UPLOAD_ROOT / task_id
+
+    session_factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
+    documents: list[Document] = []
+    async with session_factory() as session:
+        task_repo = TaskRepo(session)
+        document_repo = DocumentRepo(session)
+        await task_repo.create(task_id=task_id, requested_outputs=operations)
+        for index, upload in enumerate(files):
+            safe_name = (upload.filename or f"file-{index}").replace("/", "_")
+            destination = task_dir / f"{index:02d}-{safe_name}"
+            await _save_upload(upload, destination)
+            document_type = _detect_document_type(upload)
+            document_id = f"doc-{task_id}-{index}"
+            await document_repo.create(
+                document_id=document_id,
+                task_id=task_id,
+                document_type=document_type,
+                file_path=str(destination),
+                original_name=upload.filename,
+            )
+            documents.append(
+                Document(
+                    id=document_id,
+                    task_id=task_id,
+                    document_type=document_type,
+                    file_path=str(destination),
+                    original_name=upload.filename,
+                )
+            )
+        await session.commit()
+
+    task = Task(
+        id=task_id,
+        requested_outputs=operations,
+        conversation_id=f"conv-{task_id}",
+        documents=documents,
+    )
+    dispatch_tasks: set[asyncio.Task[None]] = request.app.state.dispatch_tasks
+    background = asyncio.create_task(_dispatch_in_background(request.app, task))
+    dispatch_tasks.add(background)
+    background.add_done_callback(dispatch_tasks.discard)
+    return {"task_id": task_id, "status": TaskStatus.PLANNING.value}
+
+
+async def _dispatch_in_background(app: Any, task: Task) -> None:
+    """Run Coordinator dispatch with its own session."""
+    session_factory = app.state.session_factory
+    async with session_factory() as session:
+        task_repo = TaskRepo(session)
+        document_repo = DocumentRepo(session)
+        coordinator = CoordinatorAgent(
+            bus=app.state.bus,
+            task_repo=task_repo,
+            document_repo=document_repo,
+        )
+        await coordinator.dispatch(task)
 
 
 @router.get("/tasks/{task_id}")
-async def get_task_status(task_id: str) -> dict[str, Any]:
-    """Return task status. Implemented in M2."""
-    raise HTTPException(status_code=501, detail="get_task_status: implemented in M2")
+async def get_task_status(request: Request, task_id: str) -> dict[str, str]:
+    session_factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
+    async with session_factory() as session:
+        task_repo = TaskRepo(session)
+        row = await task_repo.get(task_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        return {"task_id": task_id, "status": row.status}
 
 
 @router.get("/tasks/{task_id}/result")
-async def get_task_result(task_id: str) -> dict[str, Any]:
-    """Return ResultArtifact. Implemented in M3."""
-    raise HTTPException(status_code=501, detail="get_task_result: implemented in M3")
+async def get_task_result(request: Request, task_id: str) -> dict[str, Any]:
+    session_factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
+    async with session_factory() as session:
+        task_repo = TaskRepo(session)
+        row = await task_repo.get(task_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        if row.status in (TaskStatus.PLANNING.value, TaskStatus.RUNNING.value):
+            raise HTTPException(status_code=425, detail="result not ready")
+        if row.final_artifact is None:
+            raise HTTPException(status_code=425, detail="result not ready")
+        return row.final_artifact

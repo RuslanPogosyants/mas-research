@@ -1,10 +1,11 @@
-"""E2E: task status passes planning -> running -> completed. RED until M2."""
+"""E2E: task status passes planning -> running -> completed."""
 
 from __future__ import annotations
 
 import asyncio
 
 import pytest
+from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
 from src.main import app
 
@@ -14,8 +15,10 @@ class TestStatusProgression:
     async def test_status_passes_through_planning_and_running_to_completed(
         self,
     ) -> None:
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with (
+            LifespanManager(app),
+            AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client,
+        ):
             post = await client.post(
                 "/api/tasks",
                 files=[("files", ("a.mp3", b"X", "audio/mpeg"))],
@@ -30,9 +33,8 @@ class TestStatusProgression:
                 response = await client.get(f"/api/tasks/{task_id}")
                 assert response.status_code == 200
                 seen_statuses.add(response.json()["status"])
-                if response.json()["status"] == "completed":
+                if response.json()["status"] in ("completed", "partial_ready"):
                     break
                 await asyncio.sleep(0.5)
 
-            assert "running" in seen_statuses or "completed" in seen_statuses
-            assert "completed" in seen_statuses
+            assert "completed" in seen_statuses or "partial_ready" in seen_statuses

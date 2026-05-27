@@ -35,23 +35,3 @@ class TestOpenAPIEndpoints:
         body = response.json()
         assert body["service"] == "mas-subsystem"
         assert body["status"] == "ok"
-
-
-class TestUnimplementedEndpointsReturn501:
-    """In M0 routes return 501; replaced with real assertions after M2-M3."""
-
-    def test_create_task_returns_501(self) -> None:
-        response = client.post(
-            "/api/tasks",
-            files=[("files", ("a.txt", b"x", "text/plain"))],
-            data={"ops": ["F1"]},
-        )
-        assert response.status_code == 501
-
-    def test_get_task_status_returns_501(self) -> None:
-        response = client.get("/api/tasks/nonexistent")
-        assert response.status_code == 501
-
-    def test_get_task_result_returns_501(self) -> None:
-        response = client.get("/api/tasks/nonexistent/result")
-        assert response.status_code == 501
