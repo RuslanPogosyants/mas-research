@@ -41,6 +41,7 @@ class Message(BaseModel):
     reply_to: str = "agent.coordinator.inbox"
     timestamp: str
     in_reply_to: str | None = None
+    subtask_id: str | None = None
 
 
 def make_message(
@@ -52,8 +53,14 @@ def make_message(
     conversation_id: str,
     content: dict[str, Any],
     in_reply_to: str | None = None,
+    subtask_id: str | None = None,
 ) -> Message:
-    """Build a Message, auto-populating message_id, timestamp, reply_to."""
+    """Build a Message, auto-populating message_id, timestamp, reply_to.
+
+    `subtask_id` carries the Plan.Subtask correlator. Coordinator uses it to
+    route inform/refuse replies back to the right pending subtask, even when
+    the same agent appears more than once in a plan.
+    """
     return Message(
         message_id=f"msg-{uuid.uuid4().hex[:8]}",
         performative=performative,
@@ -64,4 +71,5 @@ def make_message(
         content=content,
         timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         in_reply_to=in_reply_to,
+        subtask_id=subtask_id,
     )
