@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 from src.core.schemas import Operation, TaskStatus
 from src.core.status_fsm import determine_final_status
@@ -40,6 +40,7 @@ optional_strategy = st.lists(id_strategy, min_size=0, max_size=4, unique=True)
 @settings(max_examples=50)
 @given(required=required_strategy, optional=optional_strategy)
 def test_all_successful_means_completed(required: list[str], optional: list[str]) -> None:
+    assume(not (set(required) & set(optional)))
     plan = _make_plan(required, optional)
     results = {subtask_id: {"ok": True} for subtask_id in required + optional}
     assert determine_final_status(plan, results) == TaskStatus.COMPLETED
@@ -48,6 +49,7 @@ def test_all_successful_means_completed(required: list[str], optional: list[str]
 @settings(max_examples=50)
 @given(required=required_strategy, optional=optional_strategy)
 def test_any_required_failed_means_failed(required: list[str], optional: list[str]) -> None:
+    assume(not (set(required) & set(optional)))
     plan = _make_plan(required, optional)
     results: dict[str, object] = {subtask_id: {"ok": True} for subtask_id in optional}
     results[required[0]] = None
@@ -61,6 +63,7 @@ def test_any_required_failed_means_failed(required: list[str], optional: list[st
 def test_only_optional_failed_means_partial_ready(required: list[str], optional: list[str]) -> None:
     if not optional:
         return
+    assume(not (set(required) & set(optional)))
     plan = _make_plan(required, optional)
     results: dict[str, object] = {subtask_id: {"ok": True} for subtask_id in required}
     results[optional[0]] = None
