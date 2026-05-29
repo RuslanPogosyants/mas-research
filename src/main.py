@@ -11,12 +11,14 @@ from fastapi import FastAPI
 from redis.asyncio import Redis
 
 from src.adapters.llm import FakeLlmAdapter
+from src.adapters.ner import FakeNerAdapter
 from src.adapters.ocr import FakeOcrAdapter
 from src.adapters.transcriber import FakeTranscriberAdapter
 from src.agents.coordinator import Coordinator
 from src.agents.ocr import OcrAgent
 from src.agents.store import DbTaskStore
 from src.agents.summarizer import SummarizerAgent
+from src.agents.terminology import TerminologyAgent
 from src.agents.test_generator import TestGeneratorAgent
 from src.agents.transcriber import TranscriberAgent
 from src.api.routes import router as api_router
@@ -94,7 +96,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         overlap=settings.summarizer_overlap,
     )
     test_generator_agent = TestGeneratorAgent(bus=bus, llm=llm)
-    agents = [transcriber_agent, ocr_agent, summarizer_agent, test_generator_agent]
+    terminology_agent = TerminologyAgent(bus=bus, ner=FakeNerAdapter())
+    agents = [transcriber_agent, ocr_agent, summarizer_agent, test_generator_agent, terminology_agent]
     coordinator = Coordinator(
         bus=bus,
         store=DbTaskStore(session_factory),
