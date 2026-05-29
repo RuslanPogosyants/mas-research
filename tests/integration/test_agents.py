@@ -12,6 +12,7 @@ from src.adapters.ocr import FakeOcrAdapter
 from src.adapters.transcriber import FakeTranscriberAdapter
 from src.agents.ocr import OcrAgent
 from src.agents.summarizer import SummarizerAgent
+from src.agents.test_generator import TestGeneratorAgent
 from src.agents.transcriber import TranscriberAgent
 from src.core.bus import COORDINATOR_INBOX, RedisStreamBus
 from src.core.messages import Message, Performative, make_message
@@ -19,7 +20,7 @@ from src.core.schemas import Summary
 
 
 async def _run_agent_until_replied(
-    agent: TranscriberAgent | OcrAgent | SummarizerAgent,
+    agent: TranscriberAgent | OcrAgent | SummarizerAgent | TestGeneratorAgent,
     bus: RedisStreamBus,
     request: Message,
     *,
@@ -174,5 +175,40 @@ class TestSummarizerAgentRoundTrip:
             )
             reply = await _run_agent_until_replied(agent, bus, request, channel="agent.summarizer")
             assert reply.performative == Performative.REFUSE
+        finally:
+            await redis.aclose()
+
+
+@pytest.mark.integration
+class TestTestGeneratorAgentRoundTrip:
+    async def test_test_generator_replies_inform_with_quiz(self, clean_redis: str) -> None:
+        redis = Redis.from_url(clean_redis, decode_responses=True)
+        try:
+            bus = RedisStreamBus(redis)
+            quiz_json = (
+                '{"questions": [{"question": "Q1?", "type": "single_choice", "choices": ["A", "B"], "answer_idx": 1}]}'
+            )
+            agent = TestGeneratorAgent(bus=bus, llm=FakeLlmAdapter(responses=[quiz_json]))
+            request = make_message(
+                performative=Performative.REQUEST,
+                sender="CoordinatorAgent",
+                receiver=agent.name,
+                task_id="task-q1",
+                conversation_id="conv-q1",
+                content={
+                    "summary": {
+                        "summary_id": "s1",
+                        "sections": [{"type": "thesis", "text": "тема"}],
+                        "source_chunk_ids": [],
+                    },
+                    "num_questions": 1,
+                    "difficulty": "medium",
+                },
+                subtask_id="st-task-q1-F4",
+            )
+            reply = await _run_agent_until_replied(agent, bus, request, channel="agent.test_generator")
+            assert reply.performative == Performative.INFORM
+            assert reply.subtask_id == "st-task-q1-F4"
+            assert reply.content["questions"][0]["type"] == "single_choice"
         finally:
             await redis.aclose()
