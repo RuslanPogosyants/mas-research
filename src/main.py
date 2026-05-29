@@ -10,11 +10,13 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI
 from redis.asyncio import Redis
 
+from src.adapters.llm import FakeLlmAdapter
 from src.adapters.ocr import FakeOcrAdapter
 from src.adapters.transcriber import FakeTranscriberAdapter
 from src.agents.coordinator import Coordinator
 from src.agents.ocr import OcrAgent
 from src.agents.store import DbTaskStore
+from src.agents.summarizer import SummarizerAgent
 from src.agents.transcriber import TranscriberAgent
 from src.api.routes import router as api_router
 from src.config import get_settings
@@ -69,7 +71,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     transcriber_agent = TranscriberAgent(bus=bus, transcriber=FakeTranscriberAdapter())
     ocr_agent = OcrAgent(bus=bus, ocr=FakeOcrAdapter())
-    agents = [transcriber_agent, ocr_agent]
+    summarizer_agent = SummarizerAgent(
+        bus=bus,
+        llm=FakeLlmAdapter(),
+        block_chars=settings.summarizer_block_chars,
+        overlap=settings.summarizer_overlap,
+    )
+    agents = [transcriber_agent, ocr_agent, summarizer_agent]
     coordinator = Coordinator(
         bus=bus,
         store=DbTaskStore(session_factory),

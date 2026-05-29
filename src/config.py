@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     gigachat_credentials: str = ""
     gigachat_scope: str = "GIGACHAT_API_PERS"
     gigachat_model: str = "GigaChat-Pro"
+    gigachat_temperature: float = 0.3
+    summarizer_block_chars: int = 6000
+    summarizer_overlap: int = 500
 
     coord_global_deadline_sec: int = 1800
     coord_retry_max: int = 2
