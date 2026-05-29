@@ -27,8 +27,22 @@ from src.db.session import create_engine_and_session
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from src.adapters.llm import LlmAdapter
     from src.agents.base import AgentBase
     from src.config import Settings
+
+
+def _build_llm(settings: Settings) -> LlmAdapter:
+    """Real GigaChat when credentials are configured, else the in-process fake.
+
+    Tests blank GIGACHAT_CREDENTIALS (see tests/conftest.py) so they always get the
+    fake and never reach the live API; CI has no credentials configured either.
+    """
+    if settings.gigachat_credentials:
+        from src.adapters.gigachat import GigaChatAdapter
+
+        return GigaChatAdapter(settings)
+    return FakeLlmAdapter()
 
 
 def _agent_timeouts(settings: Settings) -> dict[str, float]:
@@ -70,15 +84,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     bus = RedisStreamBus(redis)
 
+    llm = _build_llm(settings)
     transcriber_agent = TranscriberAgent(bus=bus, transcriber=FakeTranscriberAdapter())
     ocr_agent = OcrAgent(bus=bus, ocr=FakeOcrAdapter())
     summarizer_agent = SummarizerAgent(
         bus=bus,
-        llm=FakeLlmAdapter(),
+        llm=llm,
         block_chars=settings.summarizer_block_chars,
         overlap=settings.summarizer_overlap,
     )
-    test_generator_agent = TestGeneratorAgent(bus=bus, llm=FakeLlmAdapter())
+    test_generator_agent = TestGeneratorAgent(bus=bus, llm=llm)
     agents = [transcriber_agent, ocr_agent, summarizer_agent, test_generator_agent]
     coordinator = Coordinator(
         bus=bus,

@@ -15,6 +15,13 @@ if TYPE_CHECKING:
     from testcontainers.redis import RedisContainer
 
 
+@pytest.fixture(autouse=True)
+def _force_fake_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests never call the live GigaChat API: blank the credentials so the app
+    lifespan selects FakeLlmAdapter regardless of the developer's local .env."""
+    monkeypatch.setenv("GIGACHAT_CREDENTIALS", "")
+
+
 @pytest.fixture(scope="session")
 def event_loop_policy() -> asyncio.AbstractEventLoopPolicy:
     """Session-scoped event loop policy."""
