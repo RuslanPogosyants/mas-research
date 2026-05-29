@@ -203,3 +203,66 @@ async def test_finalize_error_does_not_wedge_loop_or_starve_siblings() -> None:
     assert "task-poison" not in coordinator._tasks
     # A further tick is stable (loop not wedged).
     await coordinator._tick()
+
+
+async def test_summarizer_runs_on_one_parent_when_other_refuses() -> None:
+    # audio + pdf both eligible; OCR (F2) refuses to exhaustion, transcriber (F1) informs.
+    bus, store, clock = FakeBus(), FakeTaskStore(), Clock()
+    coordinator = _coordinator(bus, store, clock)
+    await coordinator.submit(_task("task-1", [Operation.F1_TRANSCRIBE, Operation.F2_OCR, Operation.F3_SUMMARIZE]))
+    f1_request = bus.requests_for(channel_for_agent("transcriber"))[0]
+    bus.feed_inbox(_inform(f1_request, {"chunks": [{"id": "c1", "content": "from audio"}]}))
+    refused: set[str] = set()
+    for _ in range(10):
+        for request in bus.requests_for(channel_for_agent("ocr")):
+            if request.message_id not in refused:
+                refused.add(request.message_id)
+                bus.feed_inbox(_refuse(request, "ocr down"))
+        await coordinator._tick()
+        clock.advance(6.0)
+        if bus.requests_for(channel_for_agent("summarizer")):
+            break
+    summarizer_requests = bus.requests_for(channel_for_agent("summarizer"))
+    assert len(summarizer_requests) == 1, "F3 must run on the available F1 chunks, not be skipped"
+    assert summarizer_requests[0].content["chunks"] == [{"id": "c1", "content": "from audio"}]
+
+
+async def test_summarizer_runs_on_ocr_chunks_when_transcriber_refuses() -> None:
+    bus, store, clock = FakeBus(), FakeTaskStore(), Clock()
+    coordinator = _coordinator(bus, store, clock)
+    await coordinator.submit(_task("task-1", [Operation.F1_TRANSCRIBE, Operation.F2_OCR, Operation.F3_SUMMARIZE]))
+    f2_request = bus.requests_for(channel_for_agent("ocr"))[0]
+    bus.feed_inbox(_inform(f2_request, {"chunks": [{"id": "c2", "content": "from pdf"}]}))
+    refused: set[str] = set()
+    for _ in range(10):
+        for request in bus.requests_for(channel_for_agent("transcriber")):
+            if request.message_id not in refused:
+                refused.add(request.message_id)
+                bus.feed_inbox(_refuse(request, "audio down"))
+        await coordinator._tick()
+        clock.advance(6.0)
+        if bus.requests_for(channel_for_agent("summarizer")):
+            break
+    summarizer_requests = bus.requests_for(channel_for_agent("summarizer"))
+    assert len(summarizer_requests) == 1
+    assert summarizer_requests[0].content["chunks"] == [{"id": "c2", "content": "from pdf"}]
+
+
+async def test_summarizer_skipped_when_all_parents_fail() -> None:
+    bus, store, clock = FakeBus(), FakeTaskStore(), Clock()
+    coordinator = _coordinator(bus, store, clock)
+    await coordinator.submit(_task("task-1", [Operation.F1_TRANSCRIBE, Operation.F2_OCR, Operation.F3_SUMMARIZE]))
+    refused: set[str] = set()
+    for _ in range(12):
+        for agent in ("transcriber", "ocr"):
+            for request in bus.requests_for(channel_for_agent(agent)):
+                if request.message_id not in refused:
+                    refused.add(request.message_id)
+                    bus.feed_inbox(_refuse(request, "down"))
+        await coordinator._tick()
+        clock.advance(6.0)
+        if "task-1" in store.artifacts:
+            break
+    assert bus.requests_for(channel_for_agent("summarizer")) == [], "F3 must be skipped when no chunks exist"
+    # F1/F2 are both required and both failed -> task failed (see status FSM, unchanged).
+    assert store.artifacts["task-1"]["status"] == "failed"
