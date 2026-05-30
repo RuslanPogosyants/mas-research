@@ -195,11 +195,12 @@ class Coordinator:
                 except Exception as error:
                     logger.exception(f"coordinator abandoning task {task_id}: {error}")
                     await self._abandon(task_id)
-        # Persist durability writes only after releasing the lock: the in-memory state already
-        # holds each result, so dispatch is correct regardless of whether (or how slowly) these
-        # land. Keeping I/O out of the locked section means a slow/retrying DB write never blocks
-        # submit/recover/dispatch (no head-of-line blocking); recovery re-drives any unpersisted
-        # subtask from the database on restart (M4.2b).
+        # Persist durability writes only after releasing the lock, so a slow or retrying DB
+        # write never blocks submit/recover/dispatch (no head-of-line blocking). The served
+        # result is the self-contained final_artifact written by _finalize, not these per-op
+        # rows. For a task still in flight, recovery (M4.2b) re-drives any subtask missing from
+        # the DB on restart; for a task that finalized in this tick the artifact is already the
+        # durable record, so the per-op rows are best-effort (COMPLETED tasks are not re-driven).
         for task_id, operation, content in persist_jobs:
             await self._persist_result(task_id, operation, content)
 
