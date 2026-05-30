@@ -36,6 +36,21 @@ class QuizJudgement(BaseModel):
     comment: str = ""
 
 
+class QuizPedagogyJudgement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tests_understanding: _Score
+    difficulty_appropriateness: _Score
+    distractor_quality: _Score
+    rationale: str = ""
+
+
+class TermsUsefulnessJudgement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    learning_value: _Score
+    key_concept_coverage: _Score
+    rationale: str = ""
+
+
 _SUMMARY_SYSTEM = (
     "Ты — строгий эксперт по оценке учебных конспектов. Оцени конспект по исходному тексту "
     "по шкале 1–5 для каждого критерия: faithfulness (отсутствие выдумок относительно источника), "
@@ -59,3 +74,37 @@ async def judge_summary(llm: LlmAdapter, *, summary_text: str, source_excerpt: s
 async def judge_quiz(llm: LlmAdapter, *, quiz_text: str, summary_text: str) -> QuizJudgement | None:
     user = f"КОНСПЕКТ:\n{summary_text[:_MAX_SOURCE_CHARS]}\n\nВОПРОСЫ:\n{quiz_text}"
     return await parse_with_retry(llm, system=_QUIZ_SYSTEM, user=user, model_cls=QuizJudgement, retries=_JUDGE_RETRIES)
+
+
+_QUIZ_PEDAGOGY_SYSTEM = (
+    "Ты — эксперт по педагогике и разработке учебных материалов. Оцени набор тестовых вопросов "
+    "с точки зрения СТУДЕНТА по шкале 1–5 по трём критериям: "
+    "tests_understanding (вопросы проверяют понимание, а не зазубривание фактов), "
+    "difficulty_appropriateness (сложность вопросов соответствует уровню учебного материала), "
+    "distractor_quality (варианты ответов правдоподобны и не являются очевидно неверными). "
+    'Верни строго JSON: {"tests_understanding":N,"difficulty_appropriateness":N,'
+    '"distractor_quality":N,"rationale":"..."} без markdown.'
+)
+_TERMS_USEFULNESS_SYSTEM = (
+    "Ты — эксперт по педагогике и разработке учебных материалов. Оцени список терминов "
+    "с точки зрения СТУДЕНТА по шкале 1–5 по двум критериям: "
+    "learning_value (термины являются ключевыми понятиями для изучения, а не тривиальными словами), "
+    "key_concept_coverage (список охватывает главные концепции, изложенные в конспекте). "
+    'Верни строго JSON: {"learning_value":N,"key_concept_coverage":N,"rationale":"..."} без markdown.'
+)
+
+
+async def judge_quiz_pedagogy(llm: LlmAdapter, *, quiz_text: str, summary_text: str) -> QuizPedagogyJudgement | None:
+    user = f"КОНСПЕКТ:\n{summary_text[:_MAX_SOURCE_CHARS]}\n\nВОПРОСЫ:\n{quiz_text}"
+    return await parse_with_retry(
+        llm, system=_QUIZ_PEDAGOGY_SYSTEM, user=user, model_cls=QuizPedagogyJudgement, retries=_JUDGE_RETRIES
+    )
+
+
+async def judge_terms_usefulness(
+    llm: LlmAdapter, *, terms_text: str, summary_text: str
+) -> TermsUsefulnessJudgement | None:
+    user = f"КОНСПЕКТ:\n{summary_text[:_MAX_SOURCE_CHARS]}\n\nТЕРМИНЫ:\n{terms_text}"
+    return await parse_with_retry(
+        llm, system=_TERMS_USEFULNESS_SYSTEM, user=user, model_cls=TermsUsefulnessJudgement, retries=_JUDGE_RETRIES
+    )

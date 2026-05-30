@@ -21,7 +21,7 @@ from src.evaluation.intrinsic import (
     summary_intrinsics,
     terms_intrinsics,
 )
-from src.evaluation.judge import judge_quiz, judge_summary
+from src.evaluation.judge import judge_quiz, judge_quiz_pedagogy, judge_summary, judge_terms_usefulness
 from src.evaluation.report import build_report
 from src.main import _build_llm
 
@@ -34,6 +34,10 @@ def _summary_text(summary: dict[str, Any] | None) -> str:
 
 def _quiz_text(quiz: list[dict[str, Any]]) -> str:
     return "\n".join(str(q.get("question", "")) for q in quiz)
+
+
+def _terms_text(terms: list[dict[str, Any]]) -> str:
+    return ", ".join(str(t.get("term", "")) for t in terms if t.get("term"))
 
 
 async def _load_artifact(task_id: str) -> dict[str, Any]:
@@ -63,12 +67,21 @@ async def _run(task_id: str, source_path: str, out_path: str) -> None:
     summary_text = _summary_text(result.get("summary"))
     summary_judge = await judge_summary(llm, summary_text=summary_text, source_excerpt=source_text)
     quiz_list = result.get("quiz", [])
-    quiz_judge = (
-        await judge_quiz(llm, quiz_text=_quiz_text(quiz_list), summary_text=summary_text) if quiz_list else None
+    quiz_text = _quiz_text(quiz_list)
+    quiz_judge = await judge_quiz(llm, quiz_text=quiz_text, summary_text=summary_text) if quiz_list else None
+    quiz_pedagogy_judge = (
+        await judge_quiz_pedagogy(llm, quiz_text=quiz_text, summary_text=summary_text) if quiz_list else None
+    )
+    terms_list = result.get("terms", [])
+    terms_text = _terms_text(terms_list)
+    terms_usefulness_judge = (
+        await judge_terms_usefulness(llm, terms_text=terms_text, summary_text=summary_text) if terms_list else None
     )
     judge = {
         "summary": summary_judge.model_dump() if summary_judge else None,
         "quiz": quiz_judge.model_dump() if quiz_judge else None,
+        "quiz_pedagogy": quiz_pedagogy_judge.model_dump() if quiz_pedagogy_judge else None,
+        "terms_usefulness": terms_usefulness_judge.model_dump() if terms_usefulness_judge else None,
     }
     report = build_report(task_id=task_id, timing=artifact.get("stats", {}), intrinsic=intrinsic, judge=judge)
     Path(out_path).write_text(report.markdown, encoding="utf-8")
