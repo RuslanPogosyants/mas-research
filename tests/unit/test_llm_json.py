@@ -6,12 +6,36 @@ import json
 
 from pydantic import BaseModel
 from src.adapters.llm import FakeLlmAdapter
-from src.agents._llm_json import parse_with_retry
+from src.agents._llm_json import _parse, parse_with_retry
 
 
 class _Model(BaseModel):
     a: int
     b: str
+
+
+class _Str(BaseModel):
+    a: str
+
+
+def test_parse_bare_json() -> None:
+    assert _parse('{"a": "x"}', _Str) == _Str(a="x")
+
+
+def test_parse_strips_markdown_fence_with_lang_tag() -> None:
+    assert _parse('```json\n{"a": "x"}\n```', _Str) == _Str(a="x")
+
+
+def test_parse_strips_bare_markdown_fence() -> None:
+    assert _parse('```\n{"a": "y"}\n```', _Str) == _Str(a="y")
+
+
+def test_parse_extracts_json_from_surrounding_prose() -> None:
+    assert _parse('Вот результат: {"a": "z"}. Спасибо!', _Str) == _Str(a="z")
+
+
+def test_parse_returns_none_when_no_json_present() -> None:
+    assert _parse("совсем не json", _Str) is None
 
 
 async def test_parses_valid_json_first_try() -> None:

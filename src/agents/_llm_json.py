@@ -44,9 +44,34 @@ async def parse_with_retry[ModelT: BaseModel](
     return None
 
 
+def _extract_json(response: str) -> str:
+    """Pull a JSON object out of a model response.
+
+    Real LLMs (unlike the deterministic fake) intermittently wrap their JSON in a
+    markdown code fence or surround it with prose despite instructions. This strips
+    a fence (with an optional language tag) and otherwise falls back to the
+    outermost ``{ ... }`` span, so a stray wrapper does not fail the whole parse.
+    """
+    text = response.strip()
+    if "```" in text:
+        after_open = text[text.find("```") + 3 :]
+        fence_close = after_open.find("```")
+        if fence_close != -1:
+            inner = after_open[:fence_close].strip()
+            newline = inner.find("\n")
+            if newline != -1 and inner[:newline].strip().isalpha():
+                inner = inner[newline + 1 :]
+            text = inner.strip()
+    open_brace = text.find("{")
+    close_brace = text.rfind("}")
+    if open_brace != -1 and close_brace > open_brace:
+        return text[open_brace : close_brace + 1]
+    return text
+
+
 def _parse[ModelT: BaseModel](response: str, model_cls: type[ModelT]) -> ModelT | None:
     try:
-        data = json.loads(response)
+        data = json.loads(_extract_json(response))
     except (json.JSONDecodeError, TypeError):
         return None
     try:
