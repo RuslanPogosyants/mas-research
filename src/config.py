@@ -49,7 +49,8 @@ class Settings(BaseSettings):
     force_refuse: str = ""
     hang_agent: str = ""
 
-    demo_mode: bool = True  # gates the F6 demo-corpus fallback; set False in production
+    demo_mode: bool = False  # gates the F6 demo-corpus fallback; default off is fail-safe for production
+    # (F6 refuses gracefully when no real corpus is present); set DEMO_MODE=true for demo/dev to use the built-in corpus
 
 
 def get_settings() -> Settings:

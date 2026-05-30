@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from fastapi import FastAPI, Response
+from loguru import logger
 from redis.asyncio import Redis
 
 from src.adapters.embedding import FakeEmbeddingAdapter
@@ -130,6 +131,10 @@ async def _build_recommender(bus: RedisStreamBus, settings: Settings) -> Recomme
     embedding = _build_embedding(settings)
     corpus = load_corpus(settings.corpus_path)
     if not corpus and settings.demo_mode:
+        logger.warning(
+            "F6 recommender using built-in demo corpus (demo_mode on, no real corpus at {}); not for production use",
+            settings.corpus_path,
+        )
         corpus = await _demo_corpus(embedding)
     return RecommenderAgent(bus=bus, embedding=embedding, corpus=corpus)
 
