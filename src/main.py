@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from redis.asyncio import Redis
 
 from src.adapters.embedding import FakeEmbeddingAdapter
@@ -28,6 +28,8 @@ from src.agents.transcriber import TranscriberAgent
 from src.api.routes import router as api_router
 from src.config import get_settings
 from src.core.bus import RedisStreamBus
+from src.core.logging import configure_logging
+from src.core.metrics import CONTENT_TYPE, render
 from src.db.session import create_engine_and_session
 
 if TYPE_CHECKING:
@@ -126,10 +128,33 @@ async def _teardown(
     await redis.aclose()
 
 
+def _attach_state(
+    app: FastAPI,
+    engine: object,
+    session_factory: object,
+    redis: Redis,
+    bus: RedisStreamBus,
+    agents: list[AgentBase],
+    coordinator: Coordinator,
+    agent_tasks: list[asyncio.Task[None]],
+    coordinator_task: asyncio.Task[None],
+) -> None:
+    """Store runtime objects on app.state for access by request handlers."""
+    app.state.engine = engine
+    app.state.session_factory = session_factory
+    app.state.redis = redis
+    app.state.bus = bus
+    app.state.agents = agents
+    app.state.coordinator = coordinator
+    app.state.agent_tasks = agent_tasks
+    app.state.coordinator_task = coordinator_task
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Wire DB / Redis / agents / coordinator on startup; tear down on shutdown."""
     settings = get_settings()
+    configure_logging(settings)
     engine, session_factory = create_engine_and_session(settings.database_url)
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     bus = RedisStreamBus(redis)
@@ -163,15 +188,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     agent_tasks = [asyncio.create_task(agent.run()) for agent in agents]
     coordinator_task = asyncio.create_task(coordinator.run())
-
-    app.state.engine = engine
-    app.state.session_factory = session_factory
-    app.state.redis = redis
-    app.state.bus = bus
-    app.state.agents = agents
-    app.state.coordinator = coordinator
-    app.state.agent_tasks = agent_tasks
-    app.state.coordinator_task = coordinator_task
+    _attach_state(app, engine, session_factory, redis, bus, agents, coordinator, agent_tasks, coordinator_task)
 
     try:
         yield
@@ -194,3 +211,9 @@ app.include_router(api_router)
 async def root() -> dict[str, str]:
     """Health check and pointer to interactive docs."""
     return {"service": "mas-subsystem", "docs": "/docs", "status": "ok"}
+
+
+@app.get("/metrics")
+async def metrics() -> Response:
+    """Prometheus exposition endpoint (default registry)."""
+    return Response(content=render(), media_type=CONTENT_TYPE)
