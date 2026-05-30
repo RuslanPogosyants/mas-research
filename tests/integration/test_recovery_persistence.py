@@ -91,3 +91,48 @@ async def test_result_reads_round_trip(session_factory) -> None:
         assert [r.term for r in await repo.list_term_rows("t")] == ["A"]
         assert await repo.get_quiz_row("t") is None
         assert await repo.list_citation_rows("t") == []
+
+
+@pytest.mark.integration
+async def test_load_in_flight_rebuilds_task_and_results(session_factory) -> None:
+    from src.agents.recovery import DbTaskRecovery
+    from src.plan import subtask_id_for
+
+    async with session_factory() as session:
+        await TaskRepo(session).create(task_id="t", requested_outputs=[Operation.F1_TRANSCRIBE, Operation.F3_SUMMARIZE])
+        await DocumentRepo(session).create(
+            document_id="doc-t-0", task_id="t", document_type=DocumentType.AUDIO, file_path="/a.mp3"
+        )
+        await TaskRepo(session).update_status("t", TaskStatus.RUNNING)
+        await session.commit()
+    async with session_factory() as session:
+        repo = ResultRepo(session)
+        await repo.save_chunks(
+            "t",
+            {
+                "chunks": [
+                    {
+                        "id": "chunk-doc-t-0-0",
+                        "task_id": "t",
+                        "document_id": "doc-t-0",
+                        "source_type": "audio",
+                        "content": "c",
+                        "chunk_index": 0,
+                        "confidence": None,
+                        "meta": {},
+                    },
+                ]
+            },
+        )
+        await session.commit()
+
+    recovered = await DbTaskRecovery(session_factory).load_in_flight()
+    assert len(recovered) == 1
+    item = recovered[0]
+    assert item.task.id == "t"
+    assert [d.document_type.value for d in item.task.documents] == ["audio"]
+    # F1 chunks reloaded under the deterministic F1 subtask id; F3 not yet persisted.
+    f1_id = subtask_id_for("t", Operation.F1_TRANSCRIBE)
+    assert f1_id in item.results
+    assert item.results[f1_id]["chunks"][0]["content"] == "c"
+    assert subtask_id_for("t", Operation.F3_SUMMARIZE) not in item.results
