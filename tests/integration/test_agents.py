@@ -60,7 +60,7 @@ class TestTranscriberAgentRoundTrip:
                 receiver=agent.name,
                 task_id="task-7c41",
                 conversation_id="conv-7c41-1",
-                content={"file_path": "/x.mp3", "language": "ru"},
+                content={"document_id": "doc-task-7c41-0", "file_path": "/x.mp3", "language": "ru"},
                 subtask_id="st-task-7c41-F1",
             )
             reply = await _run_agent_until_replied(agent, bus, request, channel="agent.transcriber")
@@ -69,6 +69,10 @@ class TestTranscriberAgentRoundTrip:
             assert reply.in_reply_to == request.message_id
             assert "chunks" in reply.content
             assert reply.content["language"] == "ru"
+            chunks = reply.content["chunks"]
+            assert chunks[0]["task_id"] == "task-7c41"
+            assert chunks[0]["document_id"] == "doc-task-7c41-0"
+            assert chunks[0]["id"] == "chunk-doc-task-7c41-0-0"
         finally:
             await redis.aclose()
 
