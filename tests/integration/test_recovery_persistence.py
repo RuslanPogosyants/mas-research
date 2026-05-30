@@ -136,3 +136,30 @@ async def test_load_in_flight_rebuilds_task_and_results(session_factory) -> None
     assert f1_id in item.results
     assert item.results[f1_id]["chunks"][0]["content"] == "c"
     assert subtask_id_for("t", Operation.F3_SUMMARIZE) not in item.results
+
+
+@pytest.mark.integration
+async def test_terms_referencing_absent_chunk_violate_fk(session_factory) -> None:
+    import sqlalchemy.exc
+
+    async with session_factory() as session:
+        await TaskRepo(session).create(task_id="t", requested_outputs=[Operation.F5_TERMS])
+        await session.commit()
+    # No chunks persisted; a term that references one must not silently persist.
+    async with session_factory() as session:
+        with pytest.raises(sqlalchemy.exc.IntegrityError):
+            await ResultRepo(session).save_terms(
+                "t",
+                {
+                    "terms": [
+                        {
+                            "term": "A",
+                            "lemma": "a",
+                            "frequency": 1,
+                            "category": "general",
+                            "source_chunk_id": "chunk-missing-0",
+                        }
+                    ]
+                },
+            )
+            await session.commit()
