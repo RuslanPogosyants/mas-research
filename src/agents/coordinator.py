@@ -22,7 +22,7 @@ from src.core.bus import COORDINATOR_INBOX, channel_for_agent
 from src.core.idempotency import IdempotentReceiver
 from src.core.messages import Performative, make_message
 from src.core.retry import AGENT_TIMEOUTS_SEC, BACKOFF_SECONDS, RETRY_MAX
-from src.core.schemas import TaskStatus
+from src.core.schemas import Operation, TaskStatus
 from src.core.status_fsm import determine_final_status
 from src.plan import build_plan
 
@@ -39,6 +39,8 @@ COORDINATOR_GROUP: Final[str] = "coordinator"
 COORDINATOR_NAME: Final[str] = "CoordinatorAgent"
 _INBOX_BLOCK_MS: Final[int] = 200
 _INBOX_BATCH: Final[int] = 32
+_PERSIST_RETRIES: Final[int] = 3
+_PERSIST_RETRY_DELAY_SEC: Final[float] = 0.05
 
 
 @dataclass(slots=True)
@@ -160,10 +162,25 @@ class Coordinator:
         state.retry_at.pop(subtask_id, None)
         state.pending.discard(subtask_id)
         subtask = state.plan.get(subtask_id)
-        try:
-            await self._store.save_result(state.task.id, subtask.operation, reply.content)
-        except Exception as error:
-            logger.exception(f"failed to persist result for {subtask_id}: {error}")
+        await self._persist_result(state.task.id, subtask.operation, reply.content)
+
+    async def _persist_result(self, task_id: str, operation: Operation, content: dict[str, object]) -> None:
+        """Persist one agent result reliably: bounded retry, never raises.
+
+        On definitive failure the result remains in memory so the live run still
+        completes; durability is reconciled on restart, where the database is the
+        source of truth and any unpersisted subtask is re-driven (M4.2b).
+        """
+        for attempt in range(1, _PERSIST_RETRIES + 1):
+            try:
+                await self._store.save_result(task_id, operation, content)
+                return
+            except Exception as error:
+                if attempt == _PERSIST_RETRIES:
+                    logger.error(f"persist gave up for {task_id}/{operation.value} after {attempt} tries: {error}")
+                    return
+                logger.warning(f"persist retry {attempt} for {task_id}/{operation.value}: {error}")
+                await asyncio.sleep(_PERSIST_RETRY_DELAY_SEC)
 
     async def _advance(self, state: TaskState, now: float) -> None:
         changed = True

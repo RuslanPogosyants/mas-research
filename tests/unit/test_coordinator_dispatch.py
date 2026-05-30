@@ -324,3 +324,32 @@ async def test_text_only_summary_task_does_not_complete_when_agent_refuses_empty
         if "task-1" in store.artifacts:
             break
     assert store.artifacts["task-1"]["status"] != "completed"
+
+
+class _FlakyStore(FakeTaskStore):
+    """Fails save_result the first n_failures times, then defers to FakeTaskStore."""
+
+    def __init__(self, n_failures: int) -> None:
+        super().__init__()
+        self._left = n_failures
+
+    async def save_result(self, task_id: str, operation: object, content: dict[str, object]) -> None:
+        if self._left > 0:
+            self._left -= 1
+            raise RuntimeError("transient db error")
+        await super().save_result(task_id, operation, content)
+
+
+async def test_persist_result_retries_until_success() -> None:
+    store = _FlakyStore(n_failures=2)
+    coord = Coordinator(bus=FakeBus(), store=store)
+    await coord._persist_result("task-1", Operation.F3_SUMMARIZE, {"summary_id": "s"})
+    assert store.results == [("task-1", Operation.F3_SUMMARIZE, {"summary_id": "s"})]
+
+
+async def test_persist_result_gives_up_without_raising() -> None:
+    store = _FlakyStore(n_failures=99)
+    coord = Coordinator(bus=FakeBus(), store=store)
+    # A doomed write must not raise — it cannot be allowed to wedge the dispatch loop.
+    await coord._persist_result("task-1", Operation.F3_SUMMARIZE, {"summary_id": "s"})
+    assert store.results == []
