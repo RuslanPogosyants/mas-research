@@ -178,12 +178,13 @@ class Coordinator:
             await self._bus.ack(COORDINATOR_INBOX, COORDINATOR_GROUP, entry_id)
             if self._idempotency.accept(reply.message_id):
                 replies.append(reply)
+        persist_jobs: list[tuple[str, Operation, dict[str, object]]] = []
         async with self._lock:
             now = self._clock()
             for reply in replies:
                 state = self._tasks.get(reply.task_id)
                 if state is not None:
-                    await self._route_reply(state, reply, now)
+                    self._route_reply(state, reply, now, persist_jobs)
             for task_id in list(self._tasks):
                 state = self._tasks.get(task_id)
                 if state is None:
@@ -194,8 +195,21 @@ class Coordinator:
                 except Exception as error:
                     logger.exception(f"coordinator abandoning task {task_id}: {error}")
                     await self._abandon(task_id)
+        # Persist durability writes only after releasing the lock: the in-memory state already
+        # holds each result, so dispatch is correct regardless of whether (or how slowly) these
+        # land. Keeping I/O out of the locked section means a slow/retrying DB write never blocks
+        # submit/recover/dispatch (no head-of-line blocking); recovery re-drives any unpersisted
+        # subtask from the database on restart (M4.2b).
+        for task_id, operation, content in persist_jobs:
+            await self._persist_result(task_id, operation, content)
 
-    async def _route_reply(self, state: TaskState, reply: Message, now: float) -> None:
+    def _route_reply(
+        self,
+        state: TaskState,
+        reply: Message,
+        now: float,
+        persist_jobs: list[tuple[str, Operation, dict[str, object]]],
+    ) -> None:
         subtask_id = reply.subtask_id
         if subtask_id is None or subtask_id not in state.pending:
             return
@@ -213,7 +227,7 @@ class Coordinator:
         started = state.first_attempt_at.get(subtask_id, now)
         SUBTASK_DURATION_SECONDS.labels(operation=subtask.operation.value).observe(max(now - started, 0.0))
         SUBTASK_OUTCOMES_TOTAL.labels(operation=subtask.operation.value, outcome="inform").inc()
-        await self._persist_result(state.task.id, subtask.operation, reply.content)
+        persist_jobs.append((state.task.id, subtask.operation, reply.content))
 
     async def _persist_result(self, task_id: str, operation: Operation, content: dict[str, object]) -> None:
         """Persist one agent result reliably: bounded retry, never raises.
