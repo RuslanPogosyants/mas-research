@@ -29,6 +29,7 @@ from src.plan import build_plan
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from src.agents.recovery import TaskRecovery
     from src.agents.store import TaskStore
     from src.core.bus import RedisStreamBus
     from src.core.messages import Message
@@ -74,11 +75,13 @@ class Coordinator:
         *,
         bus: RedisStreamBus,
         store: TaskStore,
+        recovery: TaskRecovery | None = None,
         agent_timeouts: dict[str, float] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._bus = bus
         self._store = store
+        self._recovery = recovery
         self._timeouts = agent_timeouts or dict(AGENT_TIMEOUTS_SEC)
         self._clock = clock
         self._tasks: dict[str, TaskState] = {}
@@ -93,6 +96,7 @@ class Coordinator:
     async def run(self) -> None:
         """Main loop; cancel-safe via shutdown() or Task.cancel()."""
         await self._bus.ensure_group(COORDINATOR_INBOX, COORDINATOR_GROUP)
+        await self._recover()
         logger.info("coordinator run loop started")
         while not self._shutdown.is_set():
             try:
@@ -121,6 +125,38 @@ class Coordinator:
             self._tasks[task.id] = state
             await self._advance(state, now)
             await self._maybe_finalize(task.id, state, now)
+
+    async def _recover(self) -> None:
+        """Rebuild in-flight tasks from persistence and resume their dispatch."""
+        if self._recovery is None:
+            return
+        recovered = await self._recovery.load_in_flight()
+        async with self._lock:
+            now = self._clock()
+            for item in recovered:
+                await self._resume(item.task, item.results, now)
+
+    async def _resume(self, task: Task, results: dict[str, object], now: float) -> None:
+        plan = build_plan(task)
+        valid_ids = {subtask.id for subtask in plan.subtasks}
+        loaded = {sid: content for sid, content in results.items() if sid in valid_ids}
+        state = TaskState(
+            task=task,
+            plan=plan,
+            pending={subtask.id for subtask in plan.subtasks if subtask.id not in loaded},
+            started_at=now,
+            published=set(loaded),
+            results=dict(loaded),
+        )
+        for subtask_id in loaded:
+            state.resolved_at[subtask_id] = now
+        logger.info(f"recovering task {task.id}: {len(loaded)} results reloaded, {len(state.pending)} pending")
+        if not state.pending:
+            await self._finalize(state, now)
+            return
+        self._tasks[task.id] = state
+        await self._advance(state, now)
+        await self._maybe_finalize(task.id, state, now)
 
     async def _tick(self) -> None:
         replies: list[Message] = []
