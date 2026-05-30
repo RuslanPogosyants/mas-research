@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import delete, select
 
 from src.core.schemas import DocumentType, Operation, TaskStatus
-from src.db.models import CitationRow, DocumentRow, TaskRow, TermRow, TextChunkRow
+from src.db.models import CitationRow, DocumentRow, QuizRow, SummaryRow, TaskRow, TermRow, TextChunkRow
 from src.db.result_mapping import chunk_rows, citation_rows, quiz_row, summary_row, term_rows
 
 if TYPE_CHECKING:
@@ -44,6 +44,11 @@ class TaskRepo:
             raise KeyError(f"task not found: {task_id}")
         row.status = status.value
         await self._session.flush()
+
+    async def find_by_status(self, statuses: set[TaskStatus]) -> list[TaskRow]:
+        values = [status.value for status in statuses]
+        result = await self._session.execute(select(TaskRow).where(TaskRow.status.in_(values)))
+        return list(result.scalars().all())
 
     async def save_artifact(self, task_id: str, *, final_artifact: dict[str, Any], stats: dict[str, Any]) -> None:
         row = await self.get(task_id)
@@ -119,3 +124,27 @@ class ResultRepo:
         for row in citation_rows(task_id, content):
             self._session.add(row)
         await self._session.flush()
+
+    async def list_chunk_rows(self, task_id: str) -> list[TextChunkRow]:
+        result = await self._session.execute(
+            select(TextChunkRow).where(TextChunkRow.task_id == task_id).order_by(TextChunkRow.id)
+        )
+        return list(result.scalars().all())
+
+    async def get_summary_row(self, task_id: str) -> SummaryRow | None:
+        result = await self._session.execute(select(SummaryRow).where(SummaryRow.task_id == task_id))
+        return result.scalar_one_or_none()
+
+    async def list_term_rows(self, task_id: str) -> list[TermRow]:
+        result = await self._session.execute(select(TermRow).where(TermRow.task_id == task_id).order_by(TermRow.id))
+        return list(result.scalars().all())
+
+    async def get_quiz_row(self, task_id: str) -> QuizRow | None:
+        result = await self._session.execute(select(QuizRow).where(QuizRow.task_id == task_id))
+        return result.scalar_one_or_none()
+
+    async def list_citation_rows(self, task_id: str) -> list[CitationRow]:
+        result = await self._session.execute(
+            select(CitationRow).where(CitationRow.task_id == task_id).order_by(CitationRow.id)
+        )
+        return list(result.scalars().all())
