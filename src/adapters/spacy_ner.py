@@ -10,21 +10,34 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import time
 from typing import Any
 
 from src.adapters.ner import TermCandidate
+from src.core.metrics import MODEL_CALL_SECONDS
 
 
 class SpacyNerAdapter:
     """NerAdapter backed by a spaCy Russian pipeline."""
 
     def __init__(self, model: str = "ru_core_news_lg") -> None:
-        import spacy  # lazy: optional ml dependency
+        self._model_name = model
+        self._nlp: Any | None = None
 
-        self._nlp = spacy.load(model)
+    def _ensure_nlp(self) -> Any:
+        if self._nlp is None:
+            import spacy  # lazy: optional ml dependency
+
+            self._nlp = spacy.load(self._model_name)
+        return self._nlp
 
     async def extract(self, text: str) -> list[TermCandidate]:
-        doc = await asyncio.to_thread(self._nlp, text)
+        nlp = self._ensure_nlp()
+        start = time.perf_counter()
+        try:
+            doc = await asyncio.to_thread(nlp, text)
+        finally:
+            MODEL_CALL_SECONDS.labels(adapter="spacy", operation="F5").observe(time.perf_counter() - start)
         candidates: list[TermCandidate] = [
             TermCandidate(text=ent.text, lemma=ent.lemma_.lower(), label=ent.label_) for ent in doc.ents
         ]

@@ -8,6 +8,9 @@ Embeddings are L2-normalised so the agent's cosine equals a dot product.
 from __future__ import annotations
 
 import asyncio
+import time
+
+from src.core.metrics import MODEL_CALL_SECONDS
 
 
 class SentenceTransformerEmbeddingAdapter:
@@ -19,5 +22,11 @@ class SentenceTransformerEmbeddingAdapter:
         self._model = SentenceTransformer(model)
 
     async def encode(self, texts: list[str]) -> list[list[float]]:
-        vectors = await asyncio.to_thread(self._model.encode, texts, normalize_embeddings=True)
+        start = time.perf_counter()
+        try:
+            vectors = await asyncio.to_thread(self._model.encode, texts, normalize_embeddings=True)
+        finally:
+            MODEL_CALL_SECONDS.labels(adapter="sentence_transformer", operation="F6").observe(
+                time.perf_counter() - start
+            )
         return [[float(value) for value in vector] for vector in vectors]
