@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     coord_timeout_terminology: int = 30
     coord_timeout_recommender: int = 15
 
+    embedding_model: str = "intfloat/multilingual-e5-base"
+    corpus_path: str = "corpus"
+
     log_level: str = "INFO"
     log_format: str = "coordinator"
 

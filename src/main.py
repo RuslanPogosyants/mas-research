@@ -10,12 +10,14 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI
 from redis.asyncio import Redis
 
+from src.adapters.embedding import FakeEmbeddingAdapter
 from src.adapters.llm import FakeLlmAdapter
 from src.adapters.ner import FakeNerAdapter
 from src.adapters.ocr import FakeOcrAdapter
 from src.adapters.transcriber import FakeTranscriberAdapter
 from src.agents.coordinator import Coordinator
 from src.agents.ocr import OcrAgent
+from src.agents.recommender import RecommenderAgent, load_corpus
 from src.agents.store import DbTaskStore
 from src.agents.summarizer import SummarizerAgent
 from src.agents.terminology import TerminologyAgent
@@ -97,7 +99,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     test_generator_agent = TestGeneratorAgent(bus=bus, llm=llm)
     terminology_agent = TerminologyAgent(bus=bus, ner=FakeNerAdapter())
-    agents = [transcriber_agent, ocr_agent, summarizer_agent, test_generator_agent, terminology_agent]
+    recommender_agent = RecommenderAgent(
+        bus=bus, embedding=FakeEmbeddingAdapter(), corpus=load_corpus(settings.corpus_path)
+    )
+    agents = [
+        transcriber_agent,
+        ocr_agent,
+        summarizer_agent,
+        test_generator_agent,
+        terminology_agent,
+        recommender_agent,
+    ]
     coordinator = Coordinator(
         bus=bus,
         store=DbTaskStore(session_factory),
