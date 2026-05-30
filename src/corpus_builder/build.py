@@ -63,7 +63,7 @@ def build(out_dir: str = "corpus", model: str = "intfloat/multilingual-e5-base")
     if not papers:
         return 0
     encoder = SentenceTransformer(model)
-    embeddings = encoder.encode([paper["abstract"] for paper in papers], normalize_embeddings=True)
+    embeddings = encoder.encode([f"passage: {paper['abstract']}" for paper in papers], normalize_embeddings=True)
     base = Path(out_dir)
     base.mkdir(parents=True, exist_ok=True)
     with (base / "papers.jsonl").open("w", encoding="utf-8") as handle:
