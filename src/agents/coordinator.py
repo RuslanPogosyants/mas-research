@@ -21,6 +21,15 @@ from src.agents.payloads import build_payload
 from src.core.bus import COORDINATOR_INBOX, channel_for_agent
 from src.core.idempotency import IdempotentReceiver
 from src.core.messages import Performative, make_message
+from src.core.metrics import (
+    INFLIGHT_TASKS,
+    RECOVERED_TASKS_TOTAL,
+    RETRIES_TOTAL,
+    SUBTASK_DURATION_SECONDS,
+    SUBTASK_OUTCOMES_TOTAL,
+    TASK_DURATION_SECONDS,
+    TASKS_TOTAL,
+)
 from src.core.retry import AGENT_TIMEOUTS_SEC, BACKOFF_SECONDS, RETRY_MAX
 from src.core.schemas import Operation, TaskStatus
 from src.core.status_fsm import determine_final_status
@@ -123,6 +132,7 @@ class Coordinator:
                 await self._finalize(state, now)
                 return
             self._tasks[task.id] = state
+            INFLIGHT_TASKS.inc()
             await self._advance(state, now)
             await self._maybe_finalize(task.id, state, now)
 
@@ -137,6 +147,7 @@ class Coordinator:
                 await self._resume(item.task, item.results, now)
 
     async def _resume(self, task: Task, results: dict[str, object], now: float) -> None:
+        RECOVERED_TASKS_TOTAL.inc()
         plan = build_plan(task)
         valid_ids = {subtask.id for subtask in plan.subtasks}
         loaded = {sid: content for sid, content in results.items() if sid in valid_ids}
@@ -155,6 +166,7 @@ class Coordinator:
             await self._finalize(state, now)
             return
         self._tasks[task.id] = state
+        INFLIGHT_TASKS.inc()
         await self._advance(state, now)
         await self._maybe_finalize(task.id, state, now)
 
@@ -198,6 +210,9 @@ class Coordinator:
         state.retry_at.pop(subtask_id, None)
         state.pending.discard(subtask_id)
         subtask = state.plan.get(subtask_id)
+        started = state.first_attempt_at.get(subtask_id, now)
+        SUBTASK_DURATION_SECONDS.labels(operation=subtask.operation.value).observe(max(now - started, 0.0))
+        SUBTASK_OUTCOMES_TOTAL.labels(operation=subtask.operation.value, outcome="inform").inc()
         await self._persist_result(state.task.id, subtask.operation, reply.content)
 
     async def _persist_result(self, task_id: str, operation: Operation, content: dict[str, object]) -> None:
@@ -265,6 +280,7 @@ class Coordinator:
         state.retry_counts[subtask_id] = state.retry_counts.get(subtask_id, 0) + 1
         state.retry_at[subtask_id] = now + BACKOFF_SECONDS[state.retry_counts[subtask_id] - 1]
         state.fail_reason[subtask_id] = reason
+        RETRIES_TOTAL.labels(operation=state.plan.get(subtask_id).operation.value).inc()
 
     def _fail_subtask(self, state: TaskState, subtask_id: str, reason: str, now: float) -> None:
         state.results[subtask_id] = None
@@ -274,6 +290,7 @@ class Coordinator:
         state.retry_at.pop(subtask_id, None)
         state.published.add(subtask_id)
         state.pending.discard(subtask_id)
+        SUBTASK_OUTCOMES_TOTAL.labels(operation=state.plan.get(subtask_id).operation.value, outcome="failed").inc()
 
     async def _publish(self, state: TaskState, subtask: Subtask, now: float) -> None:
         payload = build_payload(subtask, state.task, state.results)
@@ -305,6 +322,7 @@ class Coordinator:
             return
         await self._finalize(state, now)
         self._tasks.pop(task_id, None)
+        INFLIGHT_TASKS.dec()
 
     async def _abandon(self, task_id: str) -> None:
         """Drop a task whose processing raised; best-effort mark it failed.
@@ -313,7 +331,8 @@ class Coordinator:
         payload that fails validation) must never wedge the run loop or starve
         sibling tasks. The task is removed and, where possible, persisted as failed.
         """
-        self._tasks.pop(task_id, None)
+        if self._tasks.pop(task_id, None) is not None:
+            INFLIGHT_TASKS.dec()
         try:
             await self._store.set_status(task_id, TaskStatus.FAILED)
         except Exception as error:
@@ -321,6 +340,8 @@ class Coordinator:
 
     async def _finalize(self, state: TaskState, now: float) -> None:
         status = determine_final_status(state.plan, state.results)
+        TASK_DURATION_SECONDS.labels(status=status.value).observe(max(now - state.started_at, 0.0))
+        TASKS_TOTAL.labels(status=status.value).inc()
         artifact = assemble_artifact(state, status, now)
         await self._store.save_artifact(
             state.task.id,
