@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import ForeignKey, Index, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -105,3 +105,8 @@ class CitationRow(Base):
 
 Index("idx_text_chunks_task", TextChunkRow.task_id)
 Index("idx_terms_task", TermRow.task_id)
+Index(
+    "idx_tasks_status",
+    TaskRow.status,
+    postgresql_where=text("status IN ('planning','running','partial_ready')"),
+)
