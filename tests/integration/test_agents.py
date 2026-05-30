@@ -7,11 +7,13 @@ import contextlib
 
 import pytest
 from redis.asyncio import Redis
+from src.adapters.embedding import FakeEmbeddingAdapter
 from src.adapters.llm import FakeLlmAdapter
 from src.adapters.ner import FakeNerAdapter, TermCandidate
 from src.adapters.ocr import FakeOcrAdapter
 from src.adapters.transcriber import FakeTranscriberAdapter
 from src.agents.ocr import OcrAgent
+from src.agents.recommender import CorpusEntry, RecommenderAgent
 from src.agents.summarizer import SummarizerAgent
 from src.agents.terminology import TerminologyAgent
 from src.agents.test_generator import TestGeneratorAgent
@@ -22,7 +24,7 @@ from src.core.schemas import Summary
 
 
 async def _run_agent_until_replied(
-    agent: TranscriberAgent | OcrAgent | SummarizerAgent | TestGeneratorAgent | TerminologyAgent,
+    agent: TranscriberAgent | OcrAgent | SummarizerAgent | TestGeneratorAgent | TerminologyAgent | RecommenderAgent,
     bus: RedisStreamBus,
     request: Message,
     *,
@@ -238,5 +240,39 @@ class TestTerminologyAgentRoundTrip:
             assert reply.subtask_id == "st-task-t1-F5"
             assert reply.content["terms"][0]["lemma"] == "граф"
             assert reply.content["terms"][0]["category"] == "MISC"
+        finally:
+            await redis.aclose()
+
+
+@pytest.mark.integration
+class TestRecommenderAgentRoundTrip:
+    async def test_recommender_replies_inform_with_citations(self, clean_redis: str) -> None:
+        redis = Redis.from_url(clean_redis, decode_responses=True)
+        try:
+            bus = RedisStreamBus(redis)
+            corpus = [CorpusEntry(title="Graphs", authors="A", year=2020, url="u1", embedding=(1.0, 0.0))]
+            agent = RecommenderAgent(bus=bus, embedding=FakeEmbeddingAdapter(vectors=[[1.0, 0.0]]), corpus=corpus)
+            request = make_message(
+                performative=Performative.REQUEST,
+                sender="CoordinatorAgent",
+                receiver=agent.name,
+                task_id="task-r1",
+                conversation_id="conv-r1",
+                content={
+                    "summary": {
+                        "summary_id": "s1",
+                        "sections": [{"type": "introduction", "text": "графы"}],
+                        "source_chunk_ids": [],
+                    },
+                    "terms": [],
+                    "n": 3,
+                    "filters": {},
+                },
+                subtask_id="st-task-r1-F6",
+            )
+            reply = await _run_agent_until_replied(agent, bus, request, channel="agent.recommender")
+            assert reply.performative == Performative.INFORM
+            assert reply.subtask_id == "st-task-r1-F6"
+            assert reply.content["citations"][0]["title"] == "Graphs"
         finally:
             await redis.aclose()
