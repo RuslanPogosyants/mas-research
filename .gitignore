@@ -32,7 +32,10 @@ htmlcov/
 *.swo
 
 # Project-specific
-data/
+# Ignore runtime data (uploads, etc.) but keep the committed terminology assets.
+data/*
+!data/stopwords_ru.txt
+!data/domain_categories.json
 logs/
 corpus/*.npy
 .env
