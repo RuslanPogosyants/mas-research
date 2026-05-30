@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
@@ -31,6 +32,7 @@ from src.db.session import create_engine_and_session
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from src.adapters.embedding import EmbeddingAdapter
     from src.adapters.llm import LlmAdapter
     from src.agents.base import AgentBase
     from src.config import Settings
@@ -47,6 +49,21 @@ def _build_llm(settings: Settings) -> LlmAdapter:
 
         return GigaChatAdapter(settings)
     return FakeLlmAdapter()
+
+
+def _build_embedding(settings: Settings) -> EmbeddingAdapter:
+    """Real sentence-transformers adapter when a corpus is present, else the fake.
+
+    A real corpus carries real-dimensional vectors, so the query must be embedded
+    by the same model — pairing the real adapter with the corpus prevents a
+    dimension mismatch. Without corpus files (CI/dev) the fake keeps imports light.
+    """
+    base = Path(settings.corpus_path)
+    if (base / "papers.jsonl").exists() and (base / "papers.npy").exists():
+        from src.adapters.sentence_transformer import SentenceTransformerEmbeddingAdapter
+
+        return SentenceTransformerEmbeddingAdapter(settings.embedding_model)
+    return FakeEmbeddingAdapter()
 
 
 def _agent_timeouts(settings: Settings) -> dict[str, float]:
@@ -100,7 +117,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     test_generator_agent = TestGeneratorAgent(bus=bus, llm=llm)
     terminology_agent = TerminologyAgent(bus=bus, ner=FakeNerAdapter())
     recommender_agent = RecommenderAgent(
-        bus=bus, embedding=FakeEmbeddingAdapter(), corpus=load_corpus(settings.corpus_path)
+        bus=bus, embedding=_build_embedding(settings), corpus=load_corpus(settings.corpus_path)
     )
     agents = [
         transcriber_agent,
