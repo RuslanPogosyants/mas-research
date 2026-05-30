@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 
 from src.core.schemas import DocumentType, Operation, TaskStatus
 from src.db.models import DocumentRow, TaskRow
+from src.db.result_mapping import citation_rows, quiz_row, summary_row, term_rows
 
 if TYPE_CHECKING:
-    from typing import Any
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -84,3 +83,28 @@ class DocumentRepo:
     async def list_for_task(self, task_id: str) -> list[DocumentRow]:
         result = await self._session.execute(select(DocumentRow).where(DocumentRow.task_id == task_id))
         return list(result.scalars().all())
+
+
+class ResultRepo:
+    """Upserts agent result rows (idempotent by deterministic primary key)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def save_summary(self, task_id: str, content: dict[str, Any]) -> None:
+        await self._session.merge(summary_row(task_id, content))
+        await self._session.flush()
+
+    async def save_terms(self, task_id: str, content: dict[str, Any]) -> None:
+        for row in term_rows(task_id, content):
+            await self._session.merge(row)
+        await self._session.flush()
+
+    async def save_quiz(self, task_id: str, content: dict[str, Any]) -> None:
+        await self._session.merge(quiz_row(task_id, content))
+        await self._session.flush()
+
+    async def save_citations(self, task_id: str, content: dict[str, Any]) -> None:
+        for row in citation_rows(task_id, content):
+            await self._session.merge(row)
+        await self._session.flush()
