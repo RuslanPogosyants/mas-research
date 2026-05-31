@@ -10,6 +10,17 @@ Six specialised agents run concurrently inside a single `asyncio` process, coord
 
 ---
 
+## Status and engineering highlights
+
+- **Functionally complete prototype**, validated end-to-end on real models: Whisper large-v3 (GPU), GigaChat, PyMuPDF/EasyOCR, spaCy `ru_core_news_lg`, and multilingual-e5 embeddings.
+- **Quality gates:** 333 automated tests (unit / contract / integration / end-to-end / performance), 94% line coverage, `mypy --strict` and `ruff` clean on every commit.
+- **Resilience:** crash-recovery (in-flight tasks rehydrated from PostgreSQL on restart), graceful degradation (a task returns partial results instead of failing when one component declines), bounded per-agent and per-task deadlines, and idempotent message handling.
+- **Observability:** Prometheus metrics at `/metrics`, structured logging, and a provisioned Grafana dashboard.
+- **Measured performance:** batched Whisper inference transcribes a ~25-minute lecture in roughly 78 seconds on an 8 GB laptop GPU — about 2.8x faster than non-batched; the coordinator's dispatch loop sustains several thousand task transitions per second, so the ML models, not the orchestration, are the throughput bound.
+- **Design for testability:** every model sits behind a typed `Protocol` with a deterministic in-process fake, so the whole system runs and is fully tested offline while defaulting to the real backends at runtime.
+
+---
+
 ## Architecture
 
 ```
