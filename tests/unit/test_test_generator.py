@@ -112,6 +112,103 @@ async def test_refuses_when_all_questions_malformed() -> None:
     assert "well-formed" in reply.content["reason"]
 
 
+async def test_dedup_removes_duplicate_option() -> None:
+    """Duplicate distractor «!=» at index 3 must be stripped; answer_idx unchanged."""
+    raw = json.dumps(
+        {
+            "questions": [
+                {
+                    "question": "Какой оператор проверяет равенство?",
+                    "type": "single_choice",
+                    "choices": ["==", "!=", "<>", "!="],
+                    "answer_idx": 0,
+                }
+            ]
+        }
+    )
+    agent = _agent(FakeLlmAdapter(responses=[raw]))
+    reply = await agent.handle(_request({"summary": _summary()}))
+    assert reply is not None and reply.performative == Performative.INFORM
+    question = reply.content["questions"][0]
+    assert question["choices"] == ["==", "!=", "<>"]
+    assert question["answer_idx"] == 0
+
+
+async def test_dedup_remaps_answer_idx() -> None:
+    """answer_idx pointing at a duplicate must remap to the first occurrence."""
+    raw = json.dumps(
+        {
+            "questions": [
+                {
+                    "question": "Что такое граф?",
+                    "type": "single_choice",
+                    "choices": ["A", "B", "A"],
+                    "answer_idx": 2,
+                }
+            ]
+        }
+    )
+    agent = _agent(FakeLlmAdapter(responses=[raw]))
+    reply = await agent.handle(_request({"summary": _summary()}))
+    assert reply is not None and reply.performative == Performative.INFORM
+    question = reply.content["questions"][0]
+    assert question["choices"] == ["A", "B"]
+    assert question["answer_idx"] == 0
+
+
+async def test_dedup_remaps_multi_choice_indices() -> None:
+    """answer_indices referencing a duplicate must be deduped and remapped."""
+    raw = json.dumps(
+        {
+            "questions": [
+                {
+                    "question": "Выберите верные утверждения.",
+                    "type": "multi_choice",
+                    "choices": ["A", "B", "A", "C"],
+                    "answer_indices": [2, 3],
+                }
+            ]
+        }
+    )
+    agent = _agent(FakeLlmAdapter(responses=[raw]))
+    reply = await agent.handle(_request({"summary": _summary()}))
+    assert reply is not None and reply.performative == Performative.INFORM
+    question = reply.content["questions"][0]
+    assert question["choices"] == ["A", "B", "C"]
+    assert question["answer_indices"] == [0, 2]
+
+
+async def test_dedup_degenerate_question_dropped() -> None:
+    """A single_choice whose all choices are identical after dedup collapses to 1 choice,
+    fails is_well_formed, and is dropped; if it is the only question the agent refuses."""
+    raw = json.dumps(
+        {
+            "questions": [
+                {
+                    "question": "Вопрос без смысла.",
+                    "type": "single_choice",
+                    "choices": ["X", "x"],
+                    "answer_idx": 0,
+                }
+            ]
+        }
+    )
+    # Two identical responses satisfy the retry path used in "refuses" scenarios.
+    agent = _agent(FakeLlmAdapter(responses=[raw, raw]))
+    reply = await agent.handle(_request({"summary": _summary()}))
+    assert reply is not None and reply.performative == Performative.REFUSE
+
+
+async def test_prompt_contains_quality_guidance() -> None:
+    """_SYSTEM_PROMPT must include understanding/self-contained/plausible-distractor guidance."""
+    from src.agents.test_generator import _SYSTEM_PROMPT
+
+    prompt_lower = _SYSTEM_PROMPT.lower()
+    assert "понимани" in prompt_lower
+    assert "самодостаточ" in prompt_lower
+    assert "правдоподобн" in prompt_lower
+
+
 async def test_tolerates_numeric_source_chunk_id_and_extra_fields() -> None:
     # Real GigaChat fills source_chunk_id with an integer and may add stray fields;
     # the LLM-facing model ignores them (the chunk linkage is internal, set to None).

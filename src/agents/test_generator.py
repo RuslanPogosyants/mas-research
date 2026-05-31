@@ -26,7 +26,15 @@ _SYSTEM_PROMPT: Final[str] = (
     "Ты составляешь проверочный тест по учебному саммари. Ответь СТРОГО одним "
     'JSON-объектом {"questions": [...]}. Каждый вопрос: {question, type, choices, '
     "answer_idx, answer_indices}, где type — одно из "
-    "single_choice, multi_choice, open_answer. Без markdown и пояснений."
+    "single_choice, multi_choice, open_answer. Без markdown и пояснений.\n"
+    "Требования к качеству вопросов:\n"
+    "1. Вопросы должны проверять ПОНИМАНИЕ материала, а не только запоминание фактов.\n"
+    "2. Каждый вопрос должен быть САМОДОСТАТОЧНЫМ — понятным без доступа к исходному "
+    "тексту (не используй формулировки вроде «объясните последствия» без указания, "
+    "о чём именно идёт речь).\n"
+    "3. Дистракторы (неверные варианты) должны быть ПРАВДОПОДОБНЫМИ и различными — "
+    "из той же предметной области, без повторений, без заведомо абсурдных вариантов.\n"
+    "4. Для single_choice должен существовать ровно один однозначно правильный ответ."
 )
 _DEFAULT_NUM_QUESTIONS: Final[int] = 5
 _DEFAULT_DIFFICULTY: Final[str] = "medium"
@@ -80,7 +88,7 @@ class TestGeneratorAgent(AgentBase):
         )
         if quiz is None or not quiz.questions:
             return self._refuse(message, reason="llm returned invalid quiz json")
-        questions = [QuizQuestion(**raw.model_dump()) for raw in quiz.questions]
+        questions = [_dedup_choices(QuizQuestion(**raw.model_dump())) for raw in quiz.questions]
         well_formed = [question for question in questions if question.is_well_formed()]
         if not well_formed:
             return self._refuse(message, reason="llm returned no well-formed quiz questions")
@@ -92,6 +100,37 @@ class TestGeneratorAgent(AgentBase):
                 "difficulty": difficulty,
             },
         )
+
+
+def _dedup_choices(question: QuizQuestion) -> QuizQuestion:
+    """Return a copy of *question* with duplicate choices removed (case-insensitive,
+    whitespace-trimmed), preserving first-occurrence order. answer_idx / answer_indices
+    are remapped to the deduped positions so correctness is preserved.
+
+    open_answer questions and questions without choices are returned unchanged.
+    """
+    if question.type == "open_answer" or not question.choices:
+        return question
+    new_choices: list[str] = []
+    remap: dict[int, int] = {}
+    seen: dict[str, int] = {}
+    for old_index, choice in enumerate(question.choices):
+        key = choice.strip().lower()
+        if key in seen:
+            remap[old_index] = seen[key]
+        else:
+            seen[key] = len(new_choices)
+            remap[old_index] = seen[key]
+            new_choices.append(choice)
+    new_answer_idx = remap.get(question.answer_idx) if question.answer_idx is not None else None
+    new_answer_indices = (
+        sorted({remap[i] for i in question.answer_indices if i in remap})
+        if question.answer_indices is not None
+        else None
+    )
+    return question.model_copy(
+        update={"choices": new_choices, "answer_idx": new_answer_idx, "answer_indices": new_answer_indices}
+    )
 
 
 def _summary_to_text(summary: object) -> str:
