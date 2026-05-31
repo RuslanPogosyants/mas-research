@@ -218,6 +218,17 @@ python -m src.evaluation.run <task_id> --source path/to/source.txt --out report.
 ```
 Выдаёт intrinsic-оценки по каждой функции плюс оценки LLM-судьи, включая оценку полезности теста и терминов для студента.
 
+### Эмпирические метрики на публичных RU-бенчмарках
+Воспроизводимые прогоны на реальных моделях (не Fake), код метрик — `src/evaluation/{wer,rouge,term_prf}.py` (покрыт тестами), раннеры и зафиксированные версии — `experiments/` (см. [`experiments/README.md`](experiments/README.md)):
+
+| Метрика | Бенчмарк (N) | Модель | Результат |
+|---|---|---|---|
+| WER (транскрипция) | FLEURS ru_ru (50) | Whisper large-v3 | **corpus 0.052** (95% ДИ [0.034, 0.080]) |
+| ROUGE-1 лемматиз. (конспект) | Gazeta (16) | GigaChat Lite, zero-shot | **0.280** (95% ДИ [0.245, 0.316]) |
+| F1 терминов | Gazeta (15) | spaCy `ru_core_news_lg` | **0.224** (нижняя граница) |
+
+Нагрузка (`experiments/loadtest*.py`, метрики Prometheus/Grafana): оркестрация — насыщение ~8 параллельных, пик ~17 задач/с; реальный режим — латентность на 99.7% определяется LLM-стадией (F3 ≈ 13 с/документ), насыщение ~1–2 (общий клиент GigaChat сериализует вызовы).
+
 ---
 
 ## Структура проекта
@@ -233,6 +244,7 @@ src/
   evaluation/     # харнесс качества (intrinsic + LLM-as-judge)
 migrations/       # миграции alembic
 deploy/           # docker-compose наблюдаемости, конфиг Prometheus, провижининг Grafana
+experiments/      # воспроизводимые бенчмарки (WER/ROUGE/F1), нагрузочные тесты, результаты
 tests/            # unit / contracts / integration / e2e / perf
 ```
 
@@ -277,3 +289,5 @@ Python 3.13 · asyncio · FastAPI/uvicorn · Redis Streams · PostgreSQL (SQLAlc
 
 ### Quality evaluation
 `python -m src.evaluation.run <task_id> --source path/to/source.txt --out report.md` — intrinsic metrics plus LLM-as-judge ratings, including a student-usefulness assessment of the quiz and terminology.
+
+Reproducible empirical metrics on public RU benchmarks (real models, runners in `experiments/`, see [`experiments/README.md`](experiments/README.md)): WER on FLEURS ru_ru = **0.052** (Whisper large-v3); lemmatized ROUGE-1 on Gazeta = **0.280** (GigaChat Lite, zero-shot); term F1 = **0.224** (lower bound, spaCy). Load tests (Prometheus/Grafana): orchestration saturates at ~8 concurrent (~17 tasks/s); in real mode latency is ~99.7% the LLM stage (F3 ≈ 13 s/doc).
