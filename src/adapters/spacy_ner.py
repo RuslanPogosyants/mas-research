@@ -1,9 +1,17 @@
 """Real spaCy implementation of NerAdapter (used for the live demo only).
 
-`spacy` + the `ru_core_news_lg` model are optional ML dependencies imported
+`spacy` and at least one language model are optional ML dependencies imported
 lazily, so the module imports cleanly in CI where they are absent. The blocking
 spaCy pipeline runs in a worker thread to avoid stalling the asyncio event loop.
 NER entities and adjective+noun bigrams become term candidates.
+
+The model is chosen by the script of the input text: if Latin letters strictly
+outnumber Cyrillic letters the English model (`en_core_web_sm` by default) is
+used; otherwise the Russian model (`ru_core_news_lg` by default).  If the
+chosen model is absent, the lazy `spacy.load` raises ``OSError``, which
+``AgentBase._safe_handle`` turns into a graceful refuse.
+
+Loaded pipelines are cached by language to avoid repeated model loading.
 """
 
 from __future__ import annotations
@@ -11,28 +19,64 @@ from __future__ import annotations
 import asyncio
 import itertools
 import time
-from typing import Any
+from typing import Any, Final
 
 from src.adapters.ner import TermCandidate
 from src.core.metrics import MODEL_CALL_SECONDS
 
+_LANG_RU: Final[str] = "ru"
+_LANG_EN: Final[str] = "en"
+
+# Unicode ranges for Cyrillic and Basic Latin alphabetic characters.
+_CYRILLIC_START: Final[int] = 0x0400
+_CYRILLIC_END: Final[int] = 0x04FF
+_LATIN_START: Final[int] = 0x0041  # 'A'
+_LATIN_UPPER_END: Final[int] = 0x005A  # 'Z'
+_LATIN_LOWER_START: Final[int] = 0x0061  # 'a'
+_LATIN_LOWER_END: Final[int] = 0x007A  # 'z'
+
+
+def _is_cyrillic(ch: str) -> bool:
+    code = ord(ch)
+    return _CYRILLIC_START <= code <= _CYRILLIC_END
+
+
+def _is_latin(ch: str) -> bool:
+    code = ord(ch)
+    return (_LATIN_START <= code <= _LATIN_UPPER_END) or (_LATIN_LOWER_START <= code <= _LATIN_LOWER_END)
+
 
 class SpacyNerAdapter:
-    """NerAdapter backed by a spaCy Russian pipeline."""
+    """NerAdapter backed by spaCy pipelines chosen by text script."""
 
-    def __init__(self, model: str = "ru_core_news_lg") -> None:
+    def __init__(self, model: str = "ru_core_news_lg", en_model: str = "en_core_web_sm") -> None:
         self._model_name = model
-        self._nlp: Any | None = None
+        self._en_model_name = en_model
+        self._pipelines: dict[str, Any] = {}
 
-    def _ensure_nlp(self) -> Any:
-        if self._nlp is None:
+    @staticmethod
+    def _select_language(text: str) -> str:
+        """Return ``"en"`` when Latin letters strictly outnumber Cyrillic; else ``"ru"``."""
+        latin_count = 0
+        cyrillic_count = 0
+        for ch in text:
+            if _is_latin(ch):
+                latin_count += 1
+            elif _is_cyrillic(ch):
+                cyrillic_count += 1
+        return _LANG_EN if latin_count > cyrillic_count else _LANG_RU
+
+    def _ensure_nlp(self, language: str) -> Any:
+        if language not in self._pipelines:
             import spacy  # lazy: optional ml dependency
 
-            self._nlp = spacy.load(self._model_name)
-        return self._nlp
+            model_name = self._en_model_name if language == _LANG_EN else self._model_name
+            self._pipelines[language] = spacy.load(model_name)
+        return self._pipelines[language]
 
     async def extract(self, text: str) -> list[TermCandidate]:
-        nlp = self._ensure_nlp()
+        language = self._select_language(text)
+        nlp = self._ensure_nlp(language)
         start = time.perf_counter()
         try:
             doc = await asyncio.to_thread(nlp, text)
