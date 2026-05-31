@@ -1,15 +1,19 @@
 """Build the recommender corpus from the Semantic Scholar Graph API (no key).
 
 Run manually before the live F6 demo:
-    python -m src.corpus_builder.build
+    python -m src.corpus_builder.build [out_dir]
 Fetches paper metadata + abstracts for a set of queries, embeds the abstracts
-with the configured model, and writes corpus/papers.jsonl + corpus/papers.npy.
-Network + ML deps required; NOT part of CI.
+with the configured model, and writes <out_dir>/papers.jsonl + papers.npy.
+Network + ML deps required; NOT part of CI. The public Graph API is rate-limited
+(HTTP 429) for unauthenticated use, so queries are spaced out and retried with
+exponential backoff.
 """
 
 from __future__ import annotations
 
 import json
+import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +29,27 @@ _QUERIES = [
 ]
 _FIELDS = "title,abstract,year,url,authors"
 _PER_QUERY = 100
+_INTER_QUERY_DELAY_SEC = 3.0
+_MAX_RETRIES = 5
+_BACKOFF_BASE_SEC = 5.0
+_HTTP_TOO_MANY = 429
+_HTTP_SERVER_ERROR = 500
+
+
+def _search(client: httpx.Client, query: str, per_query: int) -> list[dict[str, Any]]:
+    """Run one search request, retrying on 429/5xx with exponential backoff."""
+    params: dict[str, str | int] = {"query": query, "limit": per_query, "fields": _FIELDS}
+    for attempt in range(_MAX_RETRIES):
+        response = client.get(_API, params=params)
+        if response.status_code == _HTTP_TOO_MANY or response.status_code >= _HTTP_SERVER_ERROR:
+            wait = _BACKOFF_BASE_SEC * (2**attempt)
+            print(f"  {query!r}: HTTP {response.status_code}, retry in {wait:.0f}s", flush=True)
+            time.sleep(wait)
+            continue
+        response.raise_for_status()
+        data: list[dict[str, Any]] = response.json().get("data", [])
+        return data
+    raise RuntimeError(f"rate-limited after {_MAX_RETRIES} retries for query {query!r}")
 
 
 def fetch_papers(queries: list[str] = _QUERIES, per_query: int = _PER_QUERY) -> list[dict[str, Any]]:
@@ -32,10 +57,10 @@ def fetch_papers(queries: list[str] = _QUERIES, per_query: int = _PER_QUERY) -> 
     seen: set[str] = set()
     papers: list[dict[str, Any]] = []
     with httpx.Client(timeout=30.0) as client:
-        for query in queries:
-            response = client.get(_API, params={"query": query, "limit": per_query, "fields": _FIELDS})
-            response.raise_for_status()
-            for item in response.json().get("data", []):
+        for index, query in enumerate(queries):
+            if index > 0:
+                time.sleep(_INTER_QUERY_DELAY_SEC)  # space out requests to respect the public rate limit
+            for item in _search(client, query, per_query):
                 abstract = item.get("abstract")
                 title = item.get("title")
                 if not abstract or not title or title in seen:
@@ -75,5 +100,6 @@ def build(out_dir: str = "corpus", model: str = "intfloat/multilingual-e5-base")
 
 
 if __name__ == "__main__":
-    count = build()
-    print(f"wrote {count} papers to corpus/")
+    out = sys.argv[1] if len(sys.argv) > 1 else "corpus"
+    count = build(out_dir=out)
+    print(f"wrote {count} papers to {out}/")

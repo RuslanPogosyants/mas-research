@@ -23,6 +23,8 @@ def test_fetch_papers_dedupes_and_requires_abstract(monkeypatch: pytest.MonkeyPa
     }
 
     class _Resp:
+        status_code = 200
+
         def raise_for_status(self) -> None: ...
         def json(self) -> dict[str, Any]:
             return payload
