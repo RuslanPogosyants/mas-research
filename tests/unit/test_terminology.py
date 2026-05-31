@@ -153,3 +153,83 @@ async def test_single_token_prefix_not_merged() -> None:
     lemmas = [t.lemma for t in terms]
     assert "строка" in lemmas
     assert "строфа" in lemmas
+
+
+# ---------------------------------------------------------------------------
+# Fix 1: representative is the HIGHEST-frequency member of a merge group
+# ---------------------------------------------------------------------------
+
+
+async def test_merge_rep_is_highest_frequency_member() -> None:
+    """In a 3-member near-dup group the emitted surface/lemma belongs to the
+    highest-frequency member even when the first-encountered member has the
+    lowest frequency.
+
+    Group members all share prefix «двойной кавычк» (≥ 4 chars) and differ
+    only in the final vowel — all three endings (а, и, е) are Russian inflection
+    endings so all three correctly form one merge group.
+    """
+    # «двойной кавычка» freq 1 seen first — should NOT be the representative
+    # «двойной кавычки» freq 5               — highest freq, MUST be representative
+    # «двойной кавычке» freq 3
+    candidates: list[TermCandidate] = (
+        [TermCandidate(text="двойных кавычек", lemma="двойной кавычка")]  # freq 1, first
+        + [TermCandidate(text="двойные кавычки", lemma="двойной кавычки")] * 5  # freq 5
+        + [TermCandidate(text="двойных кавычке", lemma="двойной кавычке")] * 3  # freq 3
+    )
+    agent = _agent(candidates)
+    reply = await agent.handle(_request({"chunks": [_chunk("c1", "x")]}))
+    assert reply is not None and reply.performative == Performative.INFORM
+    terms = [Term.model_validate(item) for item in reply.content["terms"]]
+    assert len(terms) == 1
+    # Frequency is sum of all members: 1 + 5 + 3 = 9
+    assert terms[0].frequency == 9
+    # Surface and lemma come from the highest-frequency member
+    assert terms[0].term == "двойные кавычки"
+    assert terms[0].lemma == "двойной кавычки"
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: bare single-letter token (e.g. «p значение») is NOT noise
+# ---------------------------------------------------------------------------
+
+
+async def test_noise_filter_keeps_bare_single_letter_token() -> None:
+    """A lemma with a bare single-letter (no dot) token must NOT be dropped.
+
+    «p значение» (p-value), «t тест» (t-test) etc. are legitimate domain terms.
+    """
+    candidates = [
+        TermCandidate(text="p значение", lemma="p значение"),
+        TermCandidate(text="t тест", lemma="t тест"),
+        TermCandidate(text="граф", lemma="граф"),
+    ]
+    agent = _agent(candidates)
+    reply = await agent.handle(_request({"chunks": [_chunk("c1", "x")]}))
+    assert reply is not None and reply.performative == Performative.INFORM
+    terms = [Term.model_validate(item) for item in reply.content["terms"]]
+    lemmas = [t.lemma for t in terms]
+    assert "p значение" in lemmas, "p-value term must survive noise filter"
+    assert "t тест" in lemmas, "t-test term must survive noise filter"
+
+
+# ---------------------------------------------------------------------------
+# Fix 3: near-dup merge only fires when differing final chars are inflections
+# ---------------------------------------------------------------------------
+
+
+async def test_non_inflection_final_chars_not_merged() -> None:
+    """«график» / «графит» differ in final к/т — neither is a Russian inflection
+    ending — so they must remain as two separate terms.
+    """
+    candidates = [
+        TermCandidate(text="график", lemma="график"),
+        TermCandidate(text="графит", lemma="графит"),
+    ]
+    agent = _agent(candidates)
+    reply = await agent.handle(_request({"chunks": [_chunk("c1", "x")]}))
+    assert reply is not None and reply.performative == Performative.INFORM
+    terms = [Term.model_validate(item) for item in reply.content["terms"]]
+    lemmas = [t.lemma for t in terms]
+    assert "график" in lemmas, "график must not be merged with графит"
+    assert "графит" in lemmas, "графит must not be merged with график"

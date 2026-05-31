@@ -45,6 +45,62 @@ def test_fetch_papers_dedupes_and_requires_abstract(monkeypatch: pytest.MonkeyPa
     assert papers[0]["authors"] == "A"
 
 
+def test_fetch_papers_retries_on_429(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 429 response on the first attempt triggers a retry that succeeds."""
+    from src.corpus_builder import build as builder
+
+    payload = {
+        "data": [
+            {
+                "title": "Retry Paper",
+                "abstract": "retry abstract",
+                "authors": [{"name": "B"}],
+                "year": 2023,
+                "url": "u9",
+            },
+        ]
+    }
+
+    class _RateLimited:
+        status_code = 429
+
+        def raise_for_status(self) -> None: ...
+        def json(self) -> dict[str, Any]:
+            return {}
+
+    class _Ok:
+        status_code = 200
+
+        def raise_for_status(self) -> None: ...
+        def json(self) -> dict[str, Any]:
+            return payload
+
+    call_count = 0
+
+    class _Client:
+        def __init__(self, *a: Any, **k: Any) -> None: ...
+        def __enter__(self) -> _Client:
+            return self
+
+        def __exit__(self, *a: Any) -> None: ...
+        def get(self, *a: Any, **k: Any) -> _RateLimited | _Ok:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _RateLimited()
+            return _Ok()
+
+    monkeypatch.setattr(builder.httpx, "Client", _Client)
+    monkeypatch.setattr(builder.time, "sleep", lambda *_: None)
+
+    papers = builder.fetch_papers(queries=["q"], per_query=10)
+
+    assert call_count == 2, "expected exactly two HTTP calls (one 429 + one 200)"
+    assert len(papers) == 1
+    assert papers[0]["title"] == "Retry Paper"
+    assert papers[0]["authors"] == "B"
+
+
 def test_build_prefixes_passages_and_writes_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from src.corpus_builder import build as builder
 

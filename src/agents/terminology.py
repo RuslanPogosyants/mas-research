@@ -27,19 +27,24 @@ _DEFAULT_TOP_N: Final[int] = 10
 _MIN_LEMMA_LEN: Final[int] = 2
 _MIN_SHARED_PREFIX: Final[int] = 4  # minimum shared-prefix length for near-duplicate last-token check
 
+# Russian vowels and soft/hard signs that can appear as inflection endings.
+# Merge is allowed only when BOTH differing final characters belong to this set,
+# preventing over-merging of genuinely distinct words (e.g. «график»/«графит»).
+_RU_INFLECTION_ENDINGS: Final[frozenset[str]] = frozenset(["а", "я", "о", "ё", "е", "у", "ю", "и", "ы", "э", "ь", "ъ"])
+
+
+_DOTTED_INITIAL_LEN: Final[int] = 2  # e.g. «и.» → len 2, single char + period
+
 
 def _is_noise_lemma(lemma: str) -> bool:
     """Return True when *lemma* looks like an initials artifact.
 
-    A lemma is considered noise when any whitespace-separated token, after
-    stripping a trailing dot, is a single character — e.g. «и. вот» contains
-    the token «и.» → stripped «и» (len 1) → noise.
+    A token is treated as an initial only when it is a single character
+    immediately followed by a period (e.g. «и.», «А.»).  Bare single-letter
+    tokens without a dot (e.g. «p» in «p значение», «t» in «t тест») are
+    legitimate domain abbreviations and must NOT be dropped.
     """
-    for token in lemma.split():
-        stripped = token.rstrip(".")
-        if len(stripped) == 1:
-            return True
-    return False
+    return any(len(token) == _DOTTED_INITIAL_LEN and token.endswith(".") for token in lemma.split())
 
 
 def _are_near_duplicate_lemmas(a: str, b: str) -> bool:
@@ -47,8 +52,10 @@ def _are_near_duplicate_lemmas(a: str, b: str) -> bool:
 
     Conservative rule: same token count, all non-final tokens are identical,
     and the last tokens either match exactly OR are of the same length and
-    differ ONLY in their final character, with a shared leading prefix of at
-    least _MIN_SHARED_PREFIX characters.
+    differ ONLY in their final character, where that final character is a
+    Russian inflection ending in both tokens (to avoid over-merging distinct
+    words like «график»/«графит»), with a shared leading prefix of at least
+    _MIN_SHARED_PREFIX characters.
     """
     tokens_a = a.split()
     tokens_b = b.split()
@@ -63,7 +70,10 @@ def _are_near_duplicate_lemmas(a: str, b: str) -> bool:
     if len(last_a) != len(last_b):
         return False
     shared_prefix = last_a[:-1]
-    return shared_prefix == last_b[:-1] and len(shared_prefix) >= _MIN_SHARED_PREFIX
+    if shared_prefix != last_b[:-1] or len(shared_prefix) < _MIN_SHARED_PREFIX:
+        return False
+    # Both differing final characters must be Russian inflection endings.
+    return last_a[-1] in _RU_INFLECTION_ENDINGS and last_b[-1] in _RU_INFLECTION_ENDINGS
 
 
 _CandidateMaps = tuple[dict[str, int], dict[str, set[str]], dict[str, tuple[str, str, str]]]
@@ -76,31 +86,40 @@ def _merge_near_duplicates(
 ) -> _CandidateMaps:
     """Group near-duplicate lemmas and return merged frequency/chunk_id/first_seen maps.
 
-    The canonical representative for each group is the lemma with the highest
-    frequency; ties are broken by lexicographic order (smaller wins).
+    Each group is reduced to a single representative: the member with the highest
+    frequency (tie-break: lexicographically smaller lemma).  The emitted surface,
+    category, and chunk_id all come from that representative's first_seen entry.
     """
-    canonical: dict[str, str] = {}
+    # 1. Union-find: map every lemma to a group key (the first-encountered member).
+    group_key: dict[str, str] = {}
     all_lemmas = list(frequency)
     for i, lemma_a in enumerate(all_lemmas):
-        if lemma_a in canonical:
+        if lemma_a in group_key:
             continue
-        canonical[lemma_a] = lemma_a
+        group_key[lemma_a] = lemma_a
         for lemma_b in all_lemmas[i + 1 :]:
-            if lemma_b not in canonical and _are_near_duplicate_lemmas(lemma_a, lemma_b):
-                canonical[lemma_b] = lemma_a
+            if lemma_b not in group_key and _are_near_duplicate_lemmas(lemma_a, lemma_b):
+                group_key[lemma_b] = lemma_a
 
+    # 2. Collect members per group.
+    groups: dict[str, list[str]] = {}
+    for lemma, key in group_key.items():
+        groups.setdefault(key, []).append(lemma)
+
+    # 3. For each group pick the best representative, then emit merged maps.
     merged_freq: dict[str, int] = {}
     merged_cids: dict[str, set[str]] = {}
     merged_fs: dict[str, tuple[str, str, str]] = {}
-    for lemma, rep in canonical.items():
-        merged_freq[rep] = merged_freq.get(rep, 0) + frequency[lemma]
-        merged_cids.setdefault(rep, set()).update(chunk_ids[lemma])
-        if (
-            rep not in merged_fs
-            or frequency[lemma] > frequency[rep]
-            or (frequency[lemma] == frequency[rep] and lemma < rep)
-        ):
-            merged_fs[rep] = first_seen[lemma]
+    for members in groups.values():
+        # Highest frequency wins; ties broken by lexicographically smaller lemma.
+        rep = min(members, key=lambda lemma: (-frequency[lemma], lemma))
+        total_freq = sum(frequency[m] for m in members)
+        union_cids: set[str] = set()
+        for m in members:
+            union_cids.update(chunk_ids[m])
+        merged_freq[rep] = total_freq
+        merged_cids[rep] = union_cids
+        merged_fs[rep] = first_seen[rep]
     return merged_freq, merged_cids, merged_fs
 
 
