@@ -153,7 +153,9 @@ async def test_timeout_retries_twice_then_fails_with_elapsed() -> None:
     assert failed["elapsed_sec"] >= 3.0
 
 
-async def test_required_failure_marks_task_failed_and_cascades() -> None:
+async def test_root_failure_cascades_and_task_fails_when_nothing_succeeds() -> None:
+    # F1 (the only ingestion root) refuses to exhaustion; F3 depends on it and is
+    # skipped. No subtask produced a result, so the task is FAILED (D1 rule).
     bus, store, clock = FakeBus(), FakeTaskStore(), Clock()
     coordinator = _coordinator(bus, store, clock)
     await coordinator.submit(_task("task-1", [Operation.F1_TRANSCRIBE, Operation.F3_SUMMARIZE], pdf=False))
@@ -264,7 +266,7 @@ async def test_summarizer_skipped_when_all_parents_fail() -> None:
         if "task-1" in store.artifacts:
             break
     assert bus.requests_for(channel_for_agent("summarizer")) == [], "F3 must be skipped when no chunks exist"
-    # F1/F2 are both required and both failed -> task failed (see status FSM, unchanged).
+    # F1, F2 fail and F3 is skipped -> no subtask produced a result -> FAILED (D1 rule).
     assert store.artifacts["task-1"]["status"] == "failed"
 
 

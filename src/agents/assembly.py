@@ -89,7 +89,9 @@ def assemble_artifact(state: TaskStateView, status: TaskStatus, now: float) -> R
     plan = state.plan
     results = state.results
     completed = [s.operation for s in plan.subtasks if results.get(s.id) is not None]
-    degraded = [s.operation for s in plan.subtasks if not s.required and results.get(s.id) is None]
+    # All missing ops (required or optional): the status FSM no longer treats the
+    # required split specially, so a PARTIAL_READY artifact reports everything missing.
+    degraded = [s.operation for s in plan.subtasks if results.get(s.id) is None]
     failed = [
         FailedOperation(
             op=subtask.operation,

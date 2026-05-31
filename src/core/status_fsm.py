@@ -1,7 +1,7 @@
 """Final task status FSM.
 
-Decides the terminal status based on which subtasks succeeded or failed,
-honouring the required vs optional split defined by the plan.
+Decides the terminal status from how many subtasks produced a result. The task
+fails only when nothing succeeded; any single success keeps the task usable.
 """
 
 from __future__ import annotations
@@ -23,15 +23,20 @@ def determine_final_status(plan: Plan, results: SubtaskResults) -> TaskStatus:
     in `results`, OR when its id is absent from `results` (never reported back
     within the deadline). Both cases collapse to `results.get(id) is None`.
 
-    Rules:
-        - Any required failed -> FAILED
-        - All required succeeded, some optional failed -> PARTIAL_READY
-        - All required and all optional succeeded -> COMPLETED
+    Rules (the required vs optional split no longer gates the status — a failed
+    required subtask does not by itself fail the task):
+        - No subtask produced a result -> FAILED
+        - At least one subtask succeeded and at least one failed -> PARTIAL_READY
+        - Every subtask succeeded -> COMPLETED
+
+    An empty plan (no subtasks) has nothing to fail and is COMPLETED.
     """
-    failed_required = any(results.get(subtask.id) is None and subtask.required for subtask in plan.subtasks)
-    if failed_required:
+    if not plan.subtasks:
+        return TaskStatus.COMPLETED
+    any_success = any(results.get(subtask.id) is not None for subtask in plan.subtasks)
+    if not any_success:
         return TaskStatus.FAILED
-    failed_optional = any(results.get(subtask.id) is None for subtask in plan.subtasks if not subtask.required)
-    if failed_optional:
+    any_failure = any(results.get(subtask.id) is None for subtask in plan.subtasks)
+    if any_failure:
         return TaskStatus.PARTIAL_READY
     return TaskStatus.COMPLETED
