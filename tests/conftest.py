@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+import contextlib
+from typing import TYPE_CHECKING, Protocol
 
 import pytest
 import pytest_asyncio
@@ -14,6 +15,56 @@ if TYPE_CHECKING:
 
     from testcontainers.postgres import PostgresContainer
     from testcontainers.redis import RedisContainer
+
+_CONTAINER_START_RETRIES = 3
+_CONTAINER_START_SLEEP = 2.0
+
+
+class _Container(Protocol):
+    """Structural interface for a testcontainer."""
+
+    def start(self) -> object: ...
+
+    def stop(self, force: bool = False, delete_volume: bool = True) -> None: ...
+
+    def get_container_host_ip(self) -> str: ...
+
+    def get_exposed_port(self, port: int) -> str: ...
+
+
+def _start_container_with_retry(container: _Container, *, redis_probe: bool = False) -> None:
+    """Start a testcontainer, retrying transient startup failures.
+
+    On each failed attempt the container is stopped before the next try so
+    Docker does not accumulate stale instances.  ``redis_probe`` adds a
+    lightweight connect+ping check after a successful ``.start()`` call so a
+    Redis container that hasn't finished its init sequence is caught here
+    rather than in the first real test.
+    """
+    import time
+
+    last_exc: BaseException | None = None
+    for attempt in range(1, _CONTAINER_START_RETRIES + 1):
+        try:
+            container.start()
+            if redis_probe:
+                import redis as _redis
+
+                host = container.get_container_host_ip()
+                port = int(container.get_exposed_port(6379))
+                client = _redis.Redis(host=host, port=port, socket_connect_timeout=5)
+                try:
+                    client.ping()
+                finally:
+                    client.close()
+            return
+        except Exception as exc:
+            last_exc = exc
+            if attempt < _CONTAINER_START_RETRIES:
+                with contextlib.suppress(Exception):
+                    container.stop()
+                time.sleep(_CONTAINER_START_SLEEP)
+    raise RuntimeError(f"Container failed to start after {_CONTAINER_START_RETRIES} attempts") from last_exc
 
 
 @pytest.fixture(autouse=True)
@@ -61,7 +112,7 @@ def postgres_container() -> Iterator[PostgresContainer]:
     from testcontainers.postgres import PostgresContainer
 
     container = PostgresContainer("postgres:16-alpine", username="test", password="test", dbname="test")
-    container.start()
+    _start_container_with_retry(container)
     try:
         yield container
     finally:
@@ -74,7 +125,7 @@ def redis_container() -> Iterator[RedisContainer]:
     from testcontainers.redis import RedisContainer
 
     container = RedisContainer("redis:7-alpine")
-    container.start()
+    _start_container_with_retry(container, redis_probe=True)
     try:
         yield container
     finally:
