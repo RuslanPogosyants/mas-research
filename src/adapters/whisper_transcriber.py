@@ -102,13 +102,21 @@ def segments_to_chunks(segments: Iterable[Any], *, target_chars: int = _DEFAULT_
 
 
 class WhisperTranscriberAdapter:
-    """faster-whisper backend. Lazy-loads the model; times the call."""
+    """faster-whisper backend. Lazy-loads the model; times the call.
 
-    def __init__(self, *, model_size: str, device: str, compute_type: str) -> None:
+    When faster-whisper exposes ``BatchedInferencePipeline`` (v1.1+), the
+    pipeline is used automatically for higher GPU utilisation; older builds
+    fall back to the plain ``WhisperModel`` without any configuration change.
+    """
+
+    def __init__(self, *, model_size: str, device: str, compute_type: str, batch_size: int = 8) -> None:
         self._model_size = model_size
         self._device = device
         self._compute_type = compute_type
+        self._batch_size = batch_size
         self._model: Any | None = None
+        self._batched: Any | None = None
+        self._use_batched: bool = False
 
     def _ensure_model(self) -> Any:
         if self._model is None:
@@ -117,11 +125,27 @@ class WhisperTranscriberAdapter:
             from faster_whisper import WhisperModel
 
             self._model = WhisperModel(self._model_size, device=self._device, compute_type=self._compute_type)
+            try:
+                from faster_whisper import BatchedInferencePipeline  # lazy: absent on older releases
+
+                self._batched = BatchedInferencePipeline(self._model)
+                self._use_batched = True
+            except Exception:  # ImportError *or* construction failure; fall back gracefully
+                self._batched = None
+                self._use_batched = False
         return self._model
 
     def _run(self, file_path: str, language: str) -> list[TextChunk]:
         model = self._ensure_model()
-        segments, _info = model.transcribe(file_path, language=language or None, vad_filter=True)
+        if self._use_batched and self._batched is not None:
+            segments, _info = self._batched.transcribe(
+                file_path,
+                language=language or None,
+                batch_size=self._batch_size,
+                vad_filter=True,
+            )
+        else:
+            segments, _info = model.transcribe(file_path, language=language or None, vad_filter=True)
         return segments_to_chunks(segments)
 
     async def transcribe(self, *, file_path: str, language: str = "ru") -> list[TextChunk]:

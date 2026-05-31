@@ -82,6 +82,7 @@ def _build_transcriber(settings: Settings) -> TranscriberAdapter:
             model_size=settings.whisper_model,
             device=settings.whisper_device,
             compute_type=settings.whisper_compute_type,
+            batch_size=settings.whisper_batch_size,
         )
     return FakeTranscriberAdapter()
 

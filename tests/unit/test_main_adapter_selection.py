@@ -41,6 +41,15 @@ def test_whisper_backend_builds_real_adapter() -> None:
     assert type(adapter).__name__ == "WhisperTranscriberAdapter"
 
 
+def test_whisper_backend_passes_batch_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_build_transcriber wires Settings.whisper_batch_size into the adapter."""
+    monkeypatch.setenv("WHISPER_BATCH_SIZE", "16")
+    settings = Settings(transcriber_backend="whisper")
+    adapter = _build_transcriber(settings)
+    assert type(adapter).__name__ == "WhisperTranscriberAdapter"
+    assert adapter._batch_size == 16  # type: ignore[union-attr]
+
+
 def test_pymupdf_backend_builds_real_adapter() -> None:
     settings = Settings(ocr_backend="pymupdf")
     adapter = _build_ocr(settings)

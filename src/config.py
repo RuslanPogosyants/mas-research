@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     whisper_model: str = "large-v3"
     whisper_device: str = "cuda"
     whisper_compute_type: str = "float16"
+    # Number of audio chunks fed to BatchedInferencePipeline per forward pass.
+    # Larger values increase GPU utilisation; 8 is a safe default for 16 GB VRAM.
+    whisper_batch_size: int = 8
     # "pymupdf" (default) | "fake" — set OCR_BACKEND=fake to skip model weights
     ocr_backend: str = "pymupdf"
     ocr_languages: str = "ru,en"
