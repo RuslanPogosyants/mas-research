@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from typing import TYPE_CHECKING, Any
+
+import pytest
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    import pytest
+_HAS_BUILD_DEPS = (
+    importlib.util.find_spec("sentence_transformers") is not None and importlib.util.find_spec("numpy") is not None
+)
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +241,7 @@ def test_fetch_papers_reconstructs_abstract(monkeypatch: pytest.MonkeyPatch) -> 
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(not _HAS_BUILD_DEPS, reason="sentence-transformers/numpy not installed (optional ml extra)")
 def test_build_prefixes_passages_and_writes_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from src.corpus_builder import build as builder
 

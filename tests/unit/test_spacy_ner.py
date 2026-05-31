@@ -5,11 +5,15 @@ All tests use a monkeypatched ``spacy.load`` so no real spaCy models are require
 
 from __future__ import annotations
 
+import importlib.util
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 from src.adapters.spacy_ner import SpacyNerAdapter
+
+_HAS_SPACY = importlib.util.find_spec("spacy") is not None
+_requires_spacy = pytest.mark.skipif(not _HAS_SPACY, reason="spacy not installed (optional ml extra)")
 
 # ---------------------------------------------------------------------------
 # Minimal spaCy stubs
@@ -62,6 +66,7 @@ class TestSelectLanguage:
 # ---------------------------------------------------------------------------
 
 
+@_requires_spacy
 class TestModelSelection:
     @pytest.mark.asyncio
     async def test_cyrillic_text_loads_ru_model(self) -> None:
@@ -85,6 +90,7 @@ class TestModelSelection:
 # ---------------------------------------------------------------------------
 
 
+@_requires_spacy
 class TestPipelineCaching:
     @pytest.mark.asyncio
     async def test_same_language_loads_model_only_once(self) -> None:
@@ -132,6 +138,7 @@ class TestPipelineCaching:
 # ---------------------------------------------------------------------------
 
 
+@_requires_spacy
 class TestExtractMany:
     def _make_nlp_with_pipe(self) -> Any:
         """Return a fake nlp whose .pipe() returns a list of empty docs."""
